@@ -10,6 +10,8 @@ on:
 jobs:
   Build:
     runs-on: ubuntu-latest
+    environment: 
+      name: ${{ github.ref_name }} 
     permissions:
       id-token: write
       contents: read
@@ -31,8 +33,8 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           audience: sts.amazonaws.com
-          aws-region: us-east-2
-          role-to-assume: ${{ secrets.iam_assume_role }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.IAM_ASSUME_ROLE }}
           
       - name: Login to Amazon ECR
         id: login-ecr
