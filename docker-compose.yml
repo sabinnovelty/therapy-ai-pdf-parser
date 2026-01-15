@@ -1,0 +1,23 @@
+services:
+  vitafy-ai-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vitafy-ai-chat
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PORT=${PORT:-8000}
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app/app  # Mount for development hot-reload
+    command: uvicorn app.app:app --host 0.0.0.0 --port ${PORT:-8000} --reload
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "python -c \"import httpx; httpx.get('http://localhost:$${PORT:-8000}/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
