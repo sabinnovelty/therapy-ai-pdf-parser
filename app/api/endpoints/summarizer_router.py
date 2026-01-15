@@ -28,9 +28,14 @@ async def summarize_notes(request: SummarizationRequest) -> SummarizationRespons
     - **onBehalfOf**: Role of the requesting user
     - **summarizationType**: Type of summarization (full or unread)
     """
-    
+
     try:
-        return await SummarizationService.summarize(request)
+        summary = await SummarizationService.summarize(request)
+        return SummarizationResponse(
+            success=True,
+            caseId=request.caseId,
+            summary=summary
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
