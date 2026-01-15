@@ -1,0 +1,66 @@
+name: Build & Deploy Pipeline
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+      - qa
+      - uat
+      - prod
+jobs:
+  Build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Get repository name
+        id: repo-name
+        uses: MariachiBear/get-repo-name-action@v1.3.0
+        with:
+          with-owner: 'false'
+          string-case: 'lowercase'
+      
+      - name: Authenticate with AWS ECR
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          audience: sts.amazonaws.com
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.iam_assume_role }}
+          
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker Image
+        run: |
+          docker build -t new-vitafy-ai-${{ github.ref_name }} .
+          docker tag new-vitafy-ai-${{ github.ref_name }}:latest 488092325391.dkr.ecr.us-east-2.amazonaws.com/new-vitafy-ai-${{ github.ref_name }}:latest
+          docker push 488092325391.dkr.ecr.us-east-2.amazonaws.com/new-vitafy-ai-${{ github.ref_name }}:latest
+
+  Deploy:
+    needs: Build
+    runs-on: ubuntu-latest
+    environment: 
+      name: ${{ github.ref_name }} 
+    steps:
+      - name: AWS SSM Send-Command
+        uses: peterkimzz/aws-ssm-send-command@master
+        id: ssm
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          instance-ids: ${{ secrets.INSTANCE_ID }}
+          working-directory: /home/ubuntu/${{ github.ref_name }}/new-vitafy-ai/
+          command: bash new-vitafy-ai.sh
+          comment: Deployed!
+
+      - name: Get the outputs
+        run: echo "command-id=${{ steps.ssm.outputs.command-id }}" >> $GITHUB_ENV
