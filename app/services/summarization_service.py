@@ -14,10 +14,11 @@ class SummarizationService:
     async def summarize(request: SummarizationRequest) -> str:
         # 2. Extreme Token Optimization: Minimize the JSON payload
         # We only send text; no IDs or redundant metadata
+        # Extract only note and createdBy.name from the full note object
         case_data = json.dumps({
             "pnt": request.patientName,
             "status": request.currentCaseStatus,
-            "notes": [n.note for n in request.notes]
+            "notes": [{"n": n.note, "by": n.createdBy.name} for n in request.notes]
         }, separators=(',', ':')) # Separators remove whitespace for token saving
 
         # 3. Choose Persona-Driven Template
