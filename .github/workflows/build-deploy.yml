@@ -34,7 +34,7 @@ jobs:
         with:
           audience: sts.amazonaws.com
           aws-region: ${{ secrets.AWS_REGION }}
-          role-to-assume: arn:aws:iam::488092325391:role/oidc-role-for-vitafy-pipeline
+          role-to-assume: ${{ secrets.IAM_ASSUME_ROLE }}
           
       - name: Login to Amazon ECR
         id: login-ecr
