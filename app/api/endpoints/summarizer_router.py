@@ -20,20 +20,24 @@ async def summarize_notes(request: SummarizationRequest) -> SummarizationRespons
     """
     Summarize case notes using AI.
 
-    - **caseId**: Unique identifier for the case
+    **Request Parameters:**
     - **notes**: List of case notes to summarize
     - **patientName**: Name of the patient
-    - **assignedTo**: Assigned care provider
     - **currentCaseStatus**: Current status of the case
-    - **onBehalfOf**: Role of the requesting user
-    - **summarizationType**: Type of summarization (full or unread)
+    - **caseId**: Unique identifier for the case (not returned in response)
+    - **assignedTo**: Assigned care provider (not returned in response)
+
+    **Response:**
+    - **success**: Boolean indicating if the summarization was successful
+    - **summary**: The generated summary text
+
+    Note: The response does not include caseId, assignedTo, onBehalfOf, or summarizationType.
     """
 
     try:
         summary = await SummarizationService.summarize(request)
         return SummarizationResponse(
             success=True,
-            caseId=request.caseId,
             summary=summary
         )
     except Exception as e:

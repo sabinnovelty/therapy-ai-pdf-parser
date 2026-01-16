@@ -23,7 +23,6 @@ class SummarizationRequest(BaseModel):
 
 class SummarizationResponse(BaseModel):
     success: bool
-    caseId: str
     summary: str
 
 
