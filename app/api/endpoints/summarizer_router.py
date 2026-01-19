@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.schemas.summarization_schema import (
     SummarizationRequest,
     SummarizationResponse,
+    SummarizationResponseWrapper,
     ErrorResponse,
 )
 from app.services.summarization_service import SummarizationService
@@ -11,12 +12,12 @@ router = APIRouter()
 
 @router.post(
     "/summarize",
-    response_model=SummarizationResponse,
+    response_model=SummarizationResponseWrapper,
     responses={500: {"model": ErrorResponse}},
     summary="Summarize Case Notes",
 )
 
-async def summarize_notes(request: SummarizationRequest) -> SummarizationResponse:
+async def summarize_notes(request: SummarizationRequest) -> SummarizationResponseWrapper:
     """
     Summarize case notes using AI.
 
@@ -36,9 +37,11 @@ async def summarize_notes(request: SummarizationRequest) -> SummarizationRespons
 
     try:
         summary = await SummarizationService.summarize(request)
-        return SummarizationResponse(
-            success=True,
-            summary=summary
+        return SummarizationResponseWrapper(
+            data=SummarizationResponse(
+                success=True,
+                summary=summary
+            )
         )
     except Exception as e:
         raise HTTPException(
