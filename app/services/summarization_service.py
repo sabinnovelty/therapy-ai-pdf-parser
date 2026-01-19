@@ -4,6 +4,9 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from app.prompts.summarization_prompts import ADVOCATE_SUMMARY_TEMPLATE
 from app.schemas.summarization_schema import SummarizationRequest
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # 1. Initialize once. Using gpt-4o-mini is already the best token-to-cost ratio.
@@ -32,5 +35,12 @@ class SummarizationService:
         summary = await chain.ainvoke({
             "case_data": case_data,
         })
+
+        await logger.info(
+            "Summary generated successfully",
+            case_id=request.caseId,
+            patient_name=request.patientName,
+            summary_length=len(summary),
+        )
 
         return summary.strip()

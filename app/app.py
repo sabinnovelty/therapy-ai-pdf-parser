@@ -1,9 +1,25 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from dotenv import load_dotenv
+
+from app.utils.logger import configure_logger, get_logger
+from app.utils.exception_handlers import (
+    validation_exception_handler,
+    general_exception_handler,
+)
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure structured logging
+configure_logger(
+    log_level="INFO",
+    enable_json=False,  # Set to True for CloudWatch JSON logs
+    cloudwatch_mode=False,  # Set to True when deploying to AWS
+)
+
+logger = get_logger(__name__)
 
 from app.api.endpoints.summarizer_router import router as summarizer_router
 
@@ -58,6 +74,10 @@ app.add_middleware(
 
 # Include routers
 app.include_router(summarizer_router, prefix="/api/v1", tags=["Summarization"])
+
+# Register exception handlers
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
 
 @app.get(
