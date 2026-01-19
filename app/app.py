@@ -73,7 +73,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(summarizer_router, prefix="/api/v1", tags=["Summarization"])
+app.include_router(summarizer_router, prefix="/api/v2/ai-services", tags=["Summarization"])
 
 # Register exception handlers
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
