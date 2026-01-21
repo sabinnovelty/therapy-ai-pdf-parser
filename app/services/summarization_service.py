@@ -2,7 +2,7 @@ import json
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from app.prompts.summarization_prompts import ADVOCATE_SUMMARY_TEMPLATE
+from app.prompts.summarization_prompts import ADVOCATE_SUMMARY_TEMPLATE, PATIENT_SUMMARY_TEMPLATE
 from app.schemas.summarization_schema import SummarizationRequest
 from app.utils.logger import get_logger
 
@@ -15,9 +15,7 @@ llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 class SummarizationService:
     @staticmethod
     async def summarize(request: SummarizationRequest) -> str:
-        # 2. Extreme Token Optimization: Minimize the JSON payload
-        # We only send text; no IDs or redundant metadata
-        # Extract only note and createdBy.name from the full note object
+
         case_data = json.dumps({
             "pnt": request.patientName,
             "status": request.currentCaseStatus,
@@ -26,6 +24,8 @@ class SummarizationService:
 
         # 3. Choose Persona-Driven Template
         template_str = ADVOCATE_SUMMARY_TEMPLATE
+        if request.onBehalfOf == "Patient":
+            template_str = PATIENT_SUMMARY_TEMPLATE
         
         # 4. LCEL Chain with strict token limit
         prompt = PromptTemplate.from_template(template_str)
