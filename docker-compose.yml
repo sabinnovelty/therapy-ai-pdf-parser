@@ -9,10 +9,15 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PORT=${PORT:-8000}
+      # RAG Environment Variables
+      - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY}
     env_file:
       - .env
     volumes:
       - ./app:/app/app  # Mount for development hot-reload
+      - ./storage:/app/storage  # Persist vector DB and uploads
     command: uvicorn app.app:app --host 0.0.0.0 --port ${PORT:-8000} --reload
     restart: unless-stopped
     healthcheck:

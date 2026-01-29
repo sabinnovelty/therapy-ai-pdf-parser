@@ -1,0 +1,424 @@
+openapi: 3.0.3
+info:
+  title: Vitafy AI Chat API
+  description: |
+    ## Vitafy AI Chat API
+
+    AI-powered summarization and RAG service for healthcare case notes.
+
+    ### Features
+
+    * **Case Note Summarization** - Generate AI-powered summaries of patient case notes
+    * **Healthcare Advocacy RAG** - Query healthcare policies, plans, and regulations
+    * **Role-based Summaries** - Tailored summaries based on user roles
+    * **Flexible Summarization Types** - Support for full and unread note summarization
+
+    ### Authentication
+
+    Currently, no authentication is required for API access.
+  version: 1.0.0
+  contact:
+    name: Vitafy Support
+    email: support@vitafy.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://api.vitafy.com
+    description: Production server
+
+tags:
+  - name: Health
+    description: Health check and status endpoints
+  - name: Summarization
+    description: Operations for summarizing healthcare case notes using AI
+  - name: Advocacy
+    description: Healthcare advocacy RAG operations
+
+paths:
+  /:
+    get:
+      tags:
+        - Health
+      summary: Root Endpoint
+      description: Welcome endpoint that confirms the API is running.
+      operationId: root
+      responses:
+        '200':
+          $ref: '#/components/responses/SuccessMessage'
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health Check
+      description: Check if the API service is healthy and responding.
+      operationId: healthCheck
+      responses:
+        '200':
+          $ref: '#/components/responses/HealthStatus'
+
+  /api/v2/ai-services/summarize:
+    post:
+      tags:
+        - Summarization
+      summary: Summarize Case Notes
+      description: |
+        Summarize case notes using AI.
+
+        **Request Parameters:**
+        - **notes**: List of case notes to summarize
+        - **patientName**: Name of the patient
+        - **currentCaseStatus**: Current status of the case
+        - **caseId**: Unique identifier for the case (not returned in response)
+        - **assignedTo**: Assigned care provider (not returned in response)
+
+        **Response:**
+        - **success**: Boolean indicating if the summarization was successful
+        - **summary**: The generated summary text
+
+        Note: The response does not include caseId, assignedTo, onBehalfOf, or summarizationType.
+      operationId: summarizeNotes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SummarizationRequest'
+            example:
+              caseId: "case-123"
+              notes:
+                - note: "Patient called regarding prescription refill..."
+                  createdBy:
+                    name: "Dr. Smith"
+                - note: "Contacted pharmacy to verify..."
+                  createdBy:
+                    name: "Nurse Johnson"
+              patientName: "John Doe"
+              assignedTo: "advocate-1"
+              currentCaseStatus: "In Progress"
+              onBehalfOf: "Healthcare Advocate"
+              summarizationType: "full"
+      responses:
+        '200':
+          $ref: '#/components/responses/SummarizationSuccess'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advocacy/admin/upload:
+    post:
+      tags:
+        - Advocacy
+      summary: Upload and index document
+      description: Upload a document for indexing into the RAG system. Processing happens in background.
+      operationId: adminUpload
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - doc_type
+                - file
+              properties:
+                tenant_id:
+                  type: string
+                  description: Tenant identifier
+                doc_type:
+                  type: string
+                  description: Document type (policy, plan, regulation, or rule)
+                  enum:
+                    - policy
+                    - plan
+                    - regulation
+                    - rule
+                plan_id:
+                  type: string
+                  description: Plan identifier, defaults to GLOBAL
+                  default: GLOBAL
+                file:
+                  type: string
+                  format: binary
+                  description: PDF file to upload
+            encoding:
+              file:
+                contentType: application/pdf
+      responses:
+        '202':
+          $ref: '#/components/responses/DocumentUploadAccepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/advocacy/patient/chat:
+    post:
+      tags:
+        - Advocacy
+      summary: Query advocacy engine
+      description: Query the RAG system for healthcare advocacy information.
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - plan_id
+                - query
+              properties:
+                tenant_id:
+                  type: string
+                  description: Tenant identifier
+                plan_id:
+                  type: string
+                  description: Plan identifier
+                query:
+                  type: string
+                  description: User query
+            example:
+              tenant_id: "tenant-123"
+              plan_id: "plan-456"
+              query: "What are the coverage benefits for mental health services?"
+      responses:
+        '200':
+          $ref: '#/components/responses/RAGResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+components:
+  schemas:
+    CreatedBy:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Name of the person who created the note
+
+    Note:
+      type: object
+      required:
+        - note
+        - createdBy
+      properties:
+        note:
+          type: string
+          description: The note content
+        createdBy:
+          $ref: '#/components/schemas/CreatedBy'
+
+    SummarizationRequest:
+      type: object
+      required:
+        - caseId
+        - notes
+        - patientName
+      properties:
+        caseId:
+          type: string
+          description: Unique identifier for the case
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Note'
+          description: List of case notes to summarize
+        patientName:
+          type: string
+          description: Name of the patient
+        assignedTo:
+          type: string
+          nullable: true
+          description: Assigned care provider
+        currentCaseStatus:
+          type: string
+          nullable: true
+          description: Current status of the case
+        onBehalfOf:
+          type: string
+          nullable: true
+          description: Person or entity on behalf of whom the action is taken
+        summarizationType:
+          type: string
+          nullable: true
+          enum:
+            - full
+            - unread
+          description: Type of summarization (full or unread)
+
+    SummarizationResponse:
+      type: object
+      required:
+        - success
+        - summary
+      properties:
+        success:
+          type: boolean
+          description: Boolean indicating if the summarization was successful
+        summary:
+          type: string
+          description: The generated summary text
+
+    SummarizationResponseWrapper:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          $ref: '#/components/schemas/SummarizationResponse'
+
+    RAGResponse:
+      type: object
+      required:
+        - answer
+        - sources
+      properties:
+        answer:
+          type: string
+          description: The answer generated by the RAG system
+        sources:
+          type: array
+          items:
+            type: string
+          description: List of source document references
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message describing what went wrong
+
+    MessageResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Response message
+
+    StatusResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Status of the service
+          enum:
+            - healthy
+            - unhealthy
+
+    DocumentUploadResponse:
+      type: object
+      required:
+        - message
+        - status
+      properties:
+        message:
+          type: string
+          description: Status message about the document upload
+        status:
+          type: string
+          description: Processing status
+          enum:
+            - processing
+
+  responses:
+    SuccessMessage:
+      description: Successful response with a welcome message
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MessageResponse'
+          example:
+            message: "Welcome to Vitafy AI Chat API"
+
+    HealthStatus:
+      description: Service is healthy
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StatusResponse'
+          example:
+            status: "healthy"
+
+    SummarizationSuccess:
+      description: Summarization completed successfully
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SummarizationResponseWrapper'
+          example:
+            data:
+              success: true
+              summary: "AI-generated summary of the case notes..."
+
+    RAGResponse:
+      description: RAG query completed successfully
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RAGResponse'
+          example:
+            answer: "Based on the healthcare policy documents, mental health services are covered under..."
+            sources:
+              - "policy_doc_2024.pdf - Section 3.2"
+              - "plan_benefits_2024.pdf - Page 15"
+
+    DocumentUploadAccepted:
+      description: Document upload accepted and processing started
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DocumentUploadResponse'
+          example:
+            message: "Document 'policy.pdf' is being indexed for tenant tenant-123"
+            status: "processing"
+
+    BadRequest:
+      description: Bad request - invalid input parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "Invalid request parameters"
+
+    ValidationError:
+      description: Validation error - request body does not match schema
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "Validation error: field 'notes' is required"
+
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "An internal server error occurred"

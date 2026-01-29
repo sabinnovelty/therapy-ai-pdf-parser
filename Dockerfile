@@ -50,6 +50,9 @@ RUN playwright install chromium && \
 # Copy application code
 COPY app/ ./app/
 
+# Create storage directories for RAG (vector DB, uploads, cache)
+RUN mkdir -p ./storage/raw_uploads ./storage/vector_db ./storage/markdown_cache
+
 # Expose port
 EXPOSE ${PORT}
 

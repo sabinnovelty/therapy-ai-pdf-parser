@@ -8,6 +8,8 @@ from app.utils.exception_handlers import (
     validation_exception_handler,
     general_exception_handler,
 )
+from app.core.config import configure_rag_settings, validate_rag_environment
+from app.services.storage_service import setup_storage
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,17 +24,19 @@ configure_logger(
 logger = get_logger(__name__)
 
 from app.api.endpoints.summarizer_router import router as summarizer_router
+from app.api.endpoints.rag_router import router as rag_router
 
 app = FastAPI(
     title="Vitafy AI Chat API",
     description="""
 ## Vitafy AI Chat API
 
-AI-powered summarization service for healthcare case notes.
+AI-powered summarization and RAG service for healthcare case notes.
 
 ### Features
 
 * **Case Note Summarization** - Generate AI-powered summaries of patient case notes
+* **Healthcare Advocacy RAG** - Query healthcare policies, plans, and regulations
 * **Role-based Summaries** - Tailored summaries based on user roles
 * **Flexible Summarization Types** - Support for full and unread note summarization
 
@@ -50,6 +54,10 @@ Currently, no authentication is required for API access.
             "description": "Operations for summarizing healthcare case notes using AI",
         },
         {
+            "name": "Advocacy",
+            "description": "Healthcare advocacy RAG operations",
+        },
+        {
             "name": "Health",
             "description": "Health check and status endpoints",
         },
@@ -63,6 +71,18 @@ Currently, no authentication is required for API access.
     },
 )
 
+# Initialize storage directories
+setup_storage()
+
+# Validate and initialize RAG configuration
+try:
+    validate_rag_environment()
+    configure_rag_settings()
+    logger.info("RAG configuration initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize RAG configuration: {str(e)}", exc_info=True)
+    # Continue startup but RAG endpoints may fail
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -74,6 +94,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(summarizer_router, prefix="/api/v2/ai-services", tags=["Summarization"])
+app.include_router(rag_router, tags=["Advocacy"])  # Prefix already defined in router
 
 # Register exception handlers
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -86,6 +107,7 @@ app.add_exception_handler(Exception, general_exception_handler)
     summary="Root Endpoint",
     description="Welcome endpoint that confirms the API is running.",
 )
+
 async def root():
     """Return a welcome message confirming the API is running."""
     return {"message": "Welcome to Vitafy AI Chat API"}
