@@ -74,7 +74,7 @@ GET /health
 
 ### Summarize Case Notes
 ```
-POST /api/v1/summarize
+POST /api/v2/ai-services/summarize
 ```
 
 **Request Body:**
