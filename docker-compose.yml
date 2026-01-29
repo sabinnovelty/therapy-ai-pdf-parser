@@ -9,10 +9,6 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PORT=${PORT:-8000}
-      # RAG Environment Variables
-      - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - VOYAGE_API_KEY=${VOYAGE_API_KEY}
     env_file:
       - .env
     volumes:

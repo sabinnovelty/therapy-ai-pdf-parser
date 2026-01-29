@@ -111,12 +111,12 @@ paths:
         '500':
           $ref: '#/components/responses/ServerError'
 
-  /v1/advocacy/admin/upload:
+  /api/v2/ai-services/admin/upload:
     post:
       tags:
         - Advocacy
       summary: Upload and index document
-      description: Upload a document for indexing into the RAG system. Processing happens in background.
+      description: Upload a document for indexing into the RAG system. Returns success status and database size after indexing completes.
       operationId: adminUpload
       requestBody:
         required: true
@@ -152,8 +152,8 @@ paths:
               file:
                 contentType: application/pdf
       responses:
-        '202':
-          $ref: '#/components/responses/DocumentUploadAccepted'
+        '200':
+          $ref: '#/components/responses/DocumentUploadSuccess'
         '400':
           $ref: '#/components/responses/BadRequest'
         '422':
@@ -161,7 +161,7 @@ paths:
         '500':
           $ref: '#/components/responses/ServerError'
 
-  /v1/advocacy/patient/chat:
+  /api/v2/ai-services/patient/chat:
     post:
       tags:
         - Advocacy
@@ -199,6 +199,58 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v2/ai-services/admin/check-db:
+    get:
+      tags:
+        - Advocacy
+      summary: Check database contents
+      description: Simple endpoint to check what's stored in the embedded database (first 20 entries by default)
+      operationId: checkDb
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of entries to return
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Database contents retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - total_entries
+                  - entries
+                properties:
+                  total_entries:
+                    type: integer
+                    description: Number of entries returned
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                    description: List of database entries
+              example:
+                total_entries: 2
+                entries:
+                  - id: "entry-1"
+                    content: "Sample content..."
+                    metadata:
+                      tenant_id: "tenant-123"
+                      doc_type: "policy"
+                  - id: "entry-2"
+                    content: "Another sample..."
+                    metadata:
+                      tenant_id: "tenant-123"
+                      doc_type: "plan"
         '500':
           $ref: '#/components/responses/ServerError'
 
@@ -332,17 +384,23 @@ components:
     DocumentUploadResponse:
       type: object
       required:
+        - success
         - message
-        - status
+        - database_size
+        - chunks_added
       properties:
+        success:
+          type: boolean
+          description: Whether the upload and indexing was successful
         message:
           type: string
           description: Status message about the document upload
-        status:
-          type: string
-          description: Processing status
-          enum:
-            - processing
+        database_size:
+          type: integer
+          description: Total number of chunks in the database after indexing
+        chunks_added:
+          type: integer
+          description: Number of chunks added from this document
 
   responses:
     SuccessMessage:
@@ -386,15 +444,17 @@ components:
               - "policy_doc_2024.pdf - Section 3.2"
               - "plan_benefits_2024.pdf - Page 15"
 
-    DocumentUploadAccepted:
-      description: Document upload accepted and processing started
+    DocumentUploadSuccess:
+      description: Document uploaded and indexed successfully
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/DocumentUploadResponse'
           example:
-            message: "Document 'policy.pdf' is being indexed for tenant tenant-123"
-            status: "processing"
+            success: true
+            message: "Document 'policy.pdf' has been successfully indexed for tenant tenant-123"
+            database_size: 150
+            chunks_added: 25
 
     BadRequest:
       description: Bad request - invalid input parameters

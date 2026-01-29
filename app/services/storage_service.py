@@ -2,11 +2,9 @@ import os
 import shutil
 from pathlib import Path
 from fastapi import UploadFile
-import chromadb
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import StorageContext
-
-STORAGE_DIR = Path("./storage")
+from app.core.storage import get_storage_client, STORAGE_DIR
 
 def setup_storage():
     """Initializes the directory structure."""
@@ -28,6 +26,7 @@ def get_vector_store(collection_name: str = "healthcare_index"):
     Get or create a ChromaDB vector store collection.
     
     Uses consistent collection name "healthcare_index" across the application.
+    Storage backend is determined by core/storage.py configuration.
     
     Args:
         collection_name: Name of the collection to use (defaults to "healthcare_index")
@@ -35,7 +34,7 @@ def get_vector_store(collection_name: str = "healthcare_index"):
     Returns:
         ChromaVectorStore instance
     """
-    db = chromadb.PersistentClient(path=str(STORAGE_DIR / "vector_db"))
+    db = get_storage_client()
     chroma_collection = db.get_or_create_collection(collection_name)
     return ChromaVectorStore(chroma_collection=chroma_collection)
 
