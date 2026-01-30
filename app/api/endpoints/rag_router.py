@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Query
 from typing import Annotated, Optional
 from app.services.ingestion_service import ingest_document_functional
@@ -57,6 +58,26 @@ async def admin_upload(
                 "chunks_added": count_after - count_before
             }
         except Exception as e:
+            # If ingestion fails, delete the file from raw_uploads
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    await logger.info(
+                        "Deleted file from raw_uploads after failed ingestion",
+                        tenant_id=tenant_id,
+                        filename=file.filename,
+                        file_path=file_path
+                    )
+            except Exception as delete_error:
+                await logger.error(
+                    "Failed to delete file from raw_uploads after ingestion failure",
+                    tenant_id=tenant_id,
+                    filename=file.filename,
+                    file_path=file_path,
+                    delete_error=str(delete_error),
+                    exc_info=True
+                )
+            
             # If ingestion fails, still return current database size
             current_count = get_database_count()
             await logger.error(
