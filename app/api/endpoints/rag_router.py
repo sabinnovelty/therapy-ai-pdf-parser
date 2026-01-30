@@ -1,9 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
-from typing import Annotated
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Query
+from typing import Annotated, Optional
 from app.services.ingestion_service import ingest_document_functional
 from app.services.advocacy_service import query_advocacy_engine, check_database_contents, get_database_count
 from app.services.storage_service import save_upload
-from app.schemas.rag_schema import RAGResponse
+from app.services.document_service import list_uploaded_documents
+from app.schemas.rag_schema import RAGResponse, DocumentListResponse, DocumentInfo
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -157,4 +158,44 @@ async def check_db(limit: int = 20):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to check database: {str(e)}"
+        )
+
+@router.get(
+    "/admin/list-documents",
+    response_model=DocumentListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List uploaded documents",
+    description="List all documents that have been uploaded to the system. Optionally filter by tenant_id."
+)
+async def list_documents(tenant_id: Optional[str] = Query(None, description="Optional tenant identifier to filter documents")):
+    """List uploaded documents, optionally filtered by tenant_id."""
+    try:
+        await logger.info(
+            "List documents request",
+            tenant_id=tenant_id if tenant_id else "all"
+        )
+        
+        documents = list_uploaded_documents(tenant_id=tenant_id)
+        document_infos = [DocumentInfo(**doc) for doc in documents]
+        
+        await logger.info(
+            "List documents completed",
+            tenant_id=tenant_id if tenant_id else "all",
+            total_documents=len(document_infos)
+        )
+        
+        return DocumentListResponse(
+            total_documents=len(document_infos),
+            documents=document_infos
+        )
+    except Exception as e:
+        await logger.error(
+            "List documents failed",
+            tenant_id=tenant_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list documents: {str(e)}"
         )

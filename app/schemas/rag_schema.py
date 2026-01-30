@@ -14,3 +14,14 @@ class PatientQueryRequest(BaseModel):
 class RAGResponse(BaseModel):
     answer: str
     sources: List[str]
+
+class DocumentInfo(BaseModel):
+    tenant_id: str
+    filename: str
+    file_path: str
+    file_size: int
+    uploaded_at: str
+
+class DocumentListResponse(BaseModel):
+    total_documents: int
+    documents: List[DocumentInfo]

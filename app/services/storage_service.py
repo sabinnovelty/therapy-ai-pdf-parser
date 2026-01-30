@@ -1,6 +1,4 @@
-import os
 import shutil
-from pathlib import Path
 from fastapi import UploadFile
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import StorageContext
@@ -49,3 +47,4 @@ def get_storage_context(vector_store):
         StorageContext instance
     """
     return StorageContext.from_defaults(vector_store=vector_store)
+
