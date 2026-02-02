@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 from app.schemas.summarization_schema import (
     SummarizationRequest,
     SummarizationResponse,
@@ -34,17 +34,10 @@ async def summarize_notes(request: SummarizationRequest) -> SummarizationRespons
 
     Note: The response does not include caseId, assignedTo, onBehalfOf, or summarizationType.
     """
-
-    try:
-        summary = await SummarizationService.summarize(request)
-        return SummarizationResponseWrapper(
-            data=SummarizationResponse(
-                success=True,
-                summary=summary
-            )
+    summary = await SummarizationService.summarize(request)
+    return SummarizationResponseWrapper(
+        data=SummarizationResponse(
+            success=True,
+            summary=summary
         )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+    )

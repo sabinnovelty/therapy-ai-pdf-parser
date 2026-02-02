@@ -2,8 +2,8 @@ from typing import Dict, List
 import re
 from llama_index.core import VectorStoreIndex
 from llama_index.core.vector_stores.types import MetadataFilters, ExactMatchFilter
-from app.core.storage import get_storage_client
-from app.services.storage_service import get_vector_store
+from app.core.storage import get_storage_client, get_storage_type, STORAGE_TYPE_CHROMA, STORAGE_TYPE_PINECONE, get_vector_store
+from app.core.data import DEFAULT_COLLECTION_NAME, PINECONE_INDEX_NAME, PINECONE_DIMENSION
 from app.prompts.advocacy_prompts import ADVOCACY_SYSTEM_PROMPT
 from app.utils.logger import get_logger
 
@@ -11,16 +11,6 @@ logger = get_logger(__name__)
 
 
 def limit_to_first_n_sentences(text: str, n: int = 10) -> str:
-    """
-    Limit text to the first N sentences.
-    
-    Args:
-        text: Input text to limit
-        n: Number of sentences to keep (default: 10)
-        
-    Returns:
-        Text limited to first N sentences, or original text if fewer sentences exist
-    """
     if not text or not text.strip():
         return text
     
@@ -36,17 +26,31 @@ def limit_to_first_n_sentences(text: str, n: int = 10) -> str:
     return text
 
 def get_database_count() -> int:
-    """
-    Get the total number of entries in the vector database.
-    
-    Returns:
-        Total count of entries in the database
-    """
     try:
-        db = get_storage_client()
-        collection = db.get_or_create_collection("healthcare_index")
-        count = collection.count()
-        return count
+        storage_type = get_storage_type()
+        collection_name = DEFAULT_COLLECTION_NAME
+        
+        if storage_type == STORAGE_TYPE_CHROMA:
+            db = get_storage_client()
+            collection = db.get_or_create_collection(collection_name)
+            count = collection.count()
+            return count
+        
+        elif storage_type == STORAGE_TYPE_PINECONE:
+            pc = get_storage_client()
+            index_name = PINECONE_INDEX_NAME or collection_name
+            index = pc.Index(index_name)
+            
+            # Get index stats
+            stats = index.describe_index_stats()
+            # Pinecone returns total_vector_count in stats
+            count = stats.get("total_vector_count", 0)
+            return count
+        
+        else:
+            logger.error(f"Unsupported storage type: {storage_type}")
+            return 0
+            
     except Exception as e:
         logger.error(f"Error getting database count: {e}", exc_info=True)
         return 0
@@ -63,105 +67,142 @@ def check_database_contents(limit: int = 20) -> List[Dict]:
         List of dictionaries containing id, text, and metadata for each entry
     """
     try:
-        # Connect directly to storage backend (determined by core/storage.py)
-        db = get_storage_client()
-        collection = db.get_or_create_collection("healthcare_index")
+        storage_type = get_storage_type()
+        collection_name = DEFAULT_COLLECTION_NAME
         
-        # Get count first
-        count = collection.count()
-        logger.info(f"Total entries in database: {count}")
+        if storage_type == STORAGE_TYPE_CHROMA:
+            # Connect directly to storage backend (determined by core/storage.py)
+            db = get_storage_client()
+            collection = db.get_or_create_collection(collection_name)
+            
+            # Get count first
+            count = collection.count()
+            logger.info(f"Total entries in database: {count}")
+            
+            # Get all entries (or up to limit)
+            results = collection.get(limit=limit)
+            
+            # Format results
+            entries = []
+            if results and results.get('ids'):
+                for i, entry_id in enumerate(results['ids']):
+                    text = results.get('documents', [None])[i] if results.get('documents') else None
+                    metadata = results.get('metadatas', [{}])[i] if results.get('metadatas') else {}
+                    entry = {
+                        "id": entry_id,
+                        "text": text[:200] + "..." if text and len(text) > 200 else text,  # Truncate long text
+                        "text_length": len(text) if text else 0,
+                        "metadata": metadata
+                    }
+                    entries.append(entry)
+            
+            logger.info(f"Retrieved {len(entries)} entries from database (total: {count})")
+            return entries
         
-        # Get all entries (or up to limit)
-        results = collection.get(limit=limit)
+        elif storage_type == STORAGE_TYPE_PINECONE:
+            pc = get_storage_client()
+            index_name = PINECONE_INDEX_NAME or collection_name
+            index = pc.Index(index_name)
+            
+            # Get index stats
+            stats = index.describe_index_stats()
+            count = stats.get("total_vector_count", 0)
+            logger.info(f"Total entries in database: {count}")
+            
+            # Query Pinecone to get sample entries
+            # Note: Pinecone doesn't have a direct "get all" API, so we use query with a dummy vector
+            # For checking contents, we'll use fetch with known IDs or query with metadata filter
+            # Since we don't know IDs, we'll query with a zero vector (not ideal but works for inspection)
+            try:
+                dimension = PINECONE_DIMENSION
+                zero_vector = [0.0] * dimension
+                
+                # Query with top_k to get sample entries
+                query_results = index.query(
+                    vector=zero_vector,
+                    top_k=min(limit, count),
+                    include_metadata=True
+                )
+                
+                entries = []
+                if query_results and query_results.get('matches'):
+                    for match in query_results['matches']:
+                        entry_id = match.get('id', '')
+                        metadata = match.get('metadata', {})
+                        # Pinecone doesn't store text directly, it's in metadata or we need to reconstruct
+                        text = metadata.get('text', metadata.get('content', ''))
+                        entry = {
+                            "id": entry_id,
+                            "text": text[:200] + "..." if text and len(text) > 200 else text,
+                            "text_length": len(text) if text else 0,
+                            "metadata": metadata
+                        }
+                        entries.append(entry)
+                
+                logger.info(f"Retrieved {len(entries)} entries from database (total: {count})")
+                return entries
+                
+            except Exception as query_error:
+                logger.warning(f"Could not query Pinecone for sample entries: {query_error}")
+                # Return empty list with count info
+                return [{"id": "N/A", "text": f"Total entries: {count}", "text_length": 0, "metadata": {}}]
         
-        # Format results
-        entries = []
-        if results and results.get('ids'):
-            for i, entry_id in enumerate(results['ids']):
-                text = results.get('documents', [None])[i] if results.get('documents') else None
-                metadata = results.get('metadatas', [{}])[i] if results.get('metadatas') else {}
-                entry = {
-                    "id": entry_id,
-                    "text": text[:200] + "..." if text and len(text) > 200 else text,  # Truncate long text
-                    "text_length": len(text) if text else 0,
-                    "metadata": metadata
-                }
-                entries.append(entry)
-        
-        logger.info(f"Retrieved {len(entries)} entries from database (total: {count})")
-        return entries
+        else:
+            raise ValueError(f"Unsupported storage type: {storage_type}")
         
     except Exception as e:
         logger.error(f"Error checking database contents: {e}", exc_info=True)
         raise
 
-async def query_advocacy_engine(query: str, tenant_id: str, plan_id: str) -> Dict[str, List[str]]:
-    """
-    Query the advocacy engine with multi-tenancy filtering.
-    
-    Filters documents for the specific tenant AND (Global rules OR the user's specific plan).
-    
-    Args:
-        query: User query string
-        tenant_id: Tenant identifier
-        plan_id: Plan identifier (or "GLOBAL")
-        
-    Returns:
-        Dictionary containing answer and sources
-        
-    Raises:
-        Exception: If query execution fails
-    """
+async def query_advocacy_engine(query: str, tenant_id: str, plan_id: str, category: str = "advocacy") -> Dict[str, List[str]]:
     try:
         await logger.info(
             "Querying advocacy engine",
             tenant_id=tenant_id,
             plan_id=plan_id,
+            category=category,
             query_length=len(query)
         )
         
-        vector_store = get_vector_store()  # Uses consistent "healthcare_index" collection
+        vector_store = get_vector_store()
         index = VectorStoreIndex.from_vector_store(vector_store)
         
-        # MULTI-TENANCY FILTERING
-        # We fetch docs for the specific tenant AND (Global rules OR the user's specific plan)
-        # Note: ChromaDB doesn't support OR filters directly, so we filter results post-query
-        filters_tenant = MetadataFilters(filters=[
+        filters = MetadataFilters(filters=[
             ExactMatchFilter(key="tenant_id", value=tenant_id),
+            ExactMatchFilter(key="category", value=category),
         ])
 
-        await logger.info(f"Filters tenant up here: {filters_tenant}")
+        await logger.info(f"Filters applied: tenant_id={tenant_id}, category={category}")
         
         query_engine = index.as_query_engine(
-            filters=filters_tenant,
+            filters=filters,
             text_qa_template=ADVOCACY_SYSTEM_PROMPT,
             similarity_top_k=5
         )
 
-        await logger.info(f"Query engine up here: {query_engine}")
+        await logger.info(f"Query engine initialized")
         
         response = await query_engine.aquery(query)
 
-        await logger.info(f"Response up here: {response}")
+        await logger.info(f"Query response received")
         
-        # Filter source nodes to include only GLOBAL or matching plan_id
         filtered_sources = []
         total_source_nodes = len(response.source_nodes) if hasattr(response, 'source_nodes') else 0
         
         for node in response.source_nodes:
-            node_plan_id = node.metadata.get("plan_id", "")
-            if node_plan_id == "GLOBAL" or node_plan_id == plan_id:
-                filtered_sources.append(node.metadata.get("source_file"))
+            source_file = node.metadata.get("source_file")
+            if source_file:
+                filtered_sources.append(source_file)
         
         sources = list(set(filtered_sources))
         
-        # Log source node information
         await logger.info(
             "Source nodes analysis",
             total_nodes=total_source_nodes,
             filtered_sources_count=len(sources),
             tenant_id=tenant_id,
-            plan_id=plan_id
+            plan_id=plan_id,
+            category=category
         )
         
         # Extract answer text from LlamaIndex Response object

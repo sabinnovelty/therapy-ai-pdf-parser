@@ -4,20 +4,6 @@ from app.core.storage import STORAGE_DIR
 
 
 def list_uploaded_documents(tenant_id: Optional[str] = None) -> List[Dict]:
-    """
-    List all uploaded documents from the storage directory.
-    
-    Args:
-        tenant_id: Optional tenant identifier to filter documents. If None, returns all documents.
-        
-    Returns:
-        List of dictionaries containing document information:
-        - tenant_id: Tenant identifier
-        - filename: Name of the file
-        - file_path: Full path to the file
-        - file_size: Size of the file in bytes
-        - uploaded_at: Timestamp when the file was last modified (upload time)
-    """
     uploads_dir = STORAGE_DIR / "raw_uploads"
     documents = []
     

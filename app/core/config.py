@@ -1,25 +1,22 @@
-import os
 from llama_index.core import Settings
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
+from app.core.data import OPENAI_API_KEY, LLAMA_API_KEY, DOCUMENT_CHUNK_SIZE, DOCUMENT_CHUNK_OVERLAP, PINECONE_DIMENSION, EMBEDDING_MODEL_DIMENSION
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+EMBEDDING_MODEL = "text-embedding-3-small"
+
 def validate_rag_environment() -> None:
-    """
-    Validate that all required environment variables for RAG are set.
-    
-    Raises:
-        ValueError: If any required environment variable is missing
-    """
     required_vars = {
-        "OPENAI_API_KEY": "OpenAI API key (for LLM and embeddings)"
+        "OPENAI_API_KEY": ("OpenAI API key (for LLM and embeddings)", OPENAI_API_KEY),
+        "LLAMA_API_KEY": ("LlamaParse API key (for PDF document parsing)", LLAMA_API_KEY)
     }
     
     missing_vars = []
-    for var_name, description in required_vars.items():
-        if not os.getenv(var_name):
+    for var_name, (description, value) in required_vars.items():
+        if not value:
             missing_vars.append(f"{var_name} ({description})")
     
     if missing_vars:
@@ -30,28 +27,44 @@ def validate_rag_environment() -> None:
     logger.info("All required RAG environment variables are set")
 
 def configure_rag_settings() -> None:
-    """Global configuration for the RAG engine."""
-    openai_api_key = os.getenv("OPENAI_API_KEY")
+    from app.core.data import OPENAI_EMBEDDING_MODEL_DIMENSIONS
+    
+    openai_api_key = OPENAI_API_KEY
     
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY must be set")
     
-    # Use OpenAI GPT-4o-mini for cost-effective RAG queries
     Settings.llm = OpenAI(
         model="gpt-4o-mini",
         api_key=openai_api_key,
         temperature=0.1
     )
     
-    # Use OpenAI embeddings (text-embedding-3-small is cost-effective)
+    expected_dimension = EMBEDDING_MODEL_DIMENSION
+    model_dimension = OPENAI_EMBEDDING_MODEL_DIMENSIONS.get(EMBEDDING_MODEL)
+    
+    if model_dimension and expected_dimension != model_dimension:
+        raise ValueError(
+            f"Invalid dimension {expected_dimension} for embedding model '{EMBEDDING_MODEL}'. "
+            f"Expected dimension: {model_dimension}. "
+            f"Set PINECONE_DIMENSION to {model_dimension}."
+        )
+    
+    if PINECONE_DIMENSION != expected_dimension:
+        raise ValueError(
+            f"Pinecone dimension mismatch: PINECONE_DIMENSION={PINECONE_DIMENSION} "
+            f"does not match EMBEDDING_MODEL_DIMENSION={expected_dimension}. "
+            f"They must be equal."
+        )
+    
     Settings.embed_model = OpenAIEmbedding(
-        model="text-embedding-3-small",
-        api_key=openai_api_key
+        model=EMBEDDING_MODEL,
+        api_key=openai_api_key,
+        dimensions=expected_dimension
     )
     
-    # Standard chunking is too basic; using larger chunks for healthcare context
-    Settings.chunk_size = 1024
-    Settings.chunk_overlap = 100
+    Settings.chunk_size = DOCUMENT_CHUNK_SIZE
+    Settings.chunk_overlap = DOCUMENT_CHUNK_OVERLAP
     
-    logger.info("RAG settings configured successfully with OpenAI")
+    logger.info(f"RAG settings configured successfully with OpenAI (embedding model: {EMBEDDING_MODEL}, dimension: {expected_dimension})")
     

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from dotenv import load_dotenv
@@ -6,10 +6,11 @@ from dotenv import load_dotenv
 from app.utils.logger import configure_logger, get_logger
 from app.utils.exception_handlers import (
     validation_exception_handler,
+    http_exception_handler,
     general_exception_handler,
 )
 from app.core.config import configure_rag_settings, validate_rag_environment
-from app.services.storage_service import setup_storage
+from app.core.storage import setup_storage
 
 # Load environment variables from .env file
 load_dotenv()
@@ -98,6 +99,7 @@ app.include_router(rag_router, tags=["Advocacy"])  # Prefix already defined in r
 
 # Register exception handlers
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
 

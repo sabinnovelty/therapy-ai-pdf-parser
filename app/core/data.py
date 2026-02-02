@@ -1,0 +1,34 @@
+import os
+from pathlib import Path
+
+DEFAULT_CATEGORY = "advocacy"
+DEFAULT_COLLECTION_NAME = "advocacy"
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+LLAMA_API_KEY = os.getenv("LLAMA_API_KEY")
+
+OPENAI_EMBEDDING_MODEL_DIMENSIONS = {
+    "text-embedding-3-small": 1024,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_PINECONE_DIMENSION = 1024
+
+STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "./storage"))
+STORAGE_TYPE = os.getenv("STORAGE_TYPE", "chroma").lower()
+
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", DEFAULT_COLLECTION_NAME)
+PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", DEFAULT_PINECONE_DIMENSION))
+PINECONE_METRIC = os.getenv("PINECONE_METRIC", "cosine")
+PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
+PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
+
+ADVOCATE_ASSISTANT_NAME = "Ava"
+
+DOCUMENT_CHUNK_SIZE = 1024
+DOCUMENT_CHUNK_OVERLAP = 100
+
+EMBEDDING_MODEL_DIMENSION = PINECONE_DIMENSION

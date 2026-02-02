@@ -4,7 +4,7 @@ from typing import List, Optional
 class AdminIngestRequest(BaseModel):
     tenant_id: str
     doc_type: str = Field(..., description="policy, plan, regulation, or rule")
-    plan_id: Optional[str] = "GLOBAL"
+    category: Optional[str] = "advocacy"
 
 class PatientQueryRequest(BaseModel):
     tenant_id: str
