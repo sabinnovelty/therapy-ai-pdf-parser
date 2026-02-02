@@ -85,3 +85,10 @@ Thumbs.db
 
 # Local development
 .local/
+
+# Application storage
+# Ignore contents but keep the directories tracked
+storage/raw_uploads/*
+!storage/raw_uploads/.gitkeep
+storage/vector_db/*
+storage/markdown_cache/*

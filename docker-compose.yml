@@ -13,6 +13,7 @@ services:
       - .env
     volumes:
       - ./app:/app/app  # Mount for development hot-reload
+      - ./storage:/app/storage  # Persist vector DB and uploads
     command: uvicorn app.app:app --host 0.0.0.0 --port ${PORT:-8000} --reload
     restart: unless-stopped
     healthcheck:

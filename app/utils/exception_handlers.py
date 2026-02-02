@@ -6,7 +6,7 @@ Centralized exception handling with structured logging.
 import json
 from typing import Any
 
-from fastapi import Request, status
+from fastapi import Request, status, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -69,6 +69,33 @@ async def validation_exception_handler(
             "detail": exc.errors(),
             "body": body,
         },
+    )
+
+
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """
+    Exception handler for HTTPException.
+
+    Logs HTTP exceptions with context and returns the appropriate response.
+
+    Args:
+        request: The FastAPI request object
+        exc: The HTTPException that was raised
+
+    Returns:
+        JSONResponse with error details
+    """
+    await logger.error(
+        "HTTP exception occurred",
+        path=request.url.path,
+        method=request.method,
+        status_code=exc.status_code,
+        detail=exc.detail,
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
     )
 
 
