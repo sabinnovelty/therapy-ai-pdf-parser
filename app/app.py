@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,UploadFile,File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from dotenv import load_dotenv
@@ -11,6 +11,16 @@ from app.utils.exception_handlers import (
 )
 from app.core.config import configure_rag_settings, validate_rag_environment
 from app.core.storage import setup_storage
+from app.core.data import STORAGE_DIR
+
+from uuid import uuid4
+import os
+
+from app.utils.file import save_to_disk
+
+from app.db.collections.files import files_collection,FileSchema
+from app.queue.queue import q
+from app.queue.worker import process_file
 
 # Load environment variables from .env file
 load_dotenv()
@@ -131,6 +141,45 @@ async def root():
         }
     }
 )
+
+@app.post('/upload')
+async def upload(file: UploadFile):
+    try:
+        filename = file.filename or "upload"
+        extension = os.path.splitext(filename)[1].lstrip(".").lower() or ""
+        doc: FileSchema = {"name": filename, "status": "saving", "extension": extension}
+        db_file = await files_collection.insert_one(document=doc)
+        file_path = str(STORAGE_DIR / "uploads" / str(db_file.inserted_id) / filename)
+        await save_to_disk(file=await file.read(), file_path=file_path)
+
+        job = q.enqueue(process_file, str(db_file.inserted_id), file_path)
+        await files_collection.update_one({"_id": db_file.inserted_id}, {"$set": {"status": "queued"}})
+
+        return {"file_id": str(db_file.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/files/{file_id}/result", summary="Get processing result by file ID")
+async def get_file_result(file_id: str):
+    """Return the stored processing result for an uploaded file, if available."""
+    from bson import ObjectId
+    try:
+        oid = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    doc = await files_collection.find_one({"_id": oid}, projection={"name": 1, "status": 1, "extension": 1, "result": 1})
+    if not doc:
+        raise HTTPException(status_code=404, detail="File not found")
+    return {
+        "file_id": file_id,
+        "name": doc.get("name"),
+        "status": doc.get("status"),
+        "extension": doc.get("extension"),
+        "result": doc.get("result"),
+    }
+
 async def health_check():
     """Return the health status of the API service."""
     return {"status": "healthy"}
+

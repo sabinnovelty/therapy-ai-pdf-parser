@@ -22,16 +22,19 @@ AI-powered summarization service for healthcare case notes using FastAPI and Lan
 1. **Clone the repository and navigate to the project directory**
 
 2. **Create your environment file**
+
    ```bash
    cp .env.example .env
    ```
 
 3. **Add your OpenAI API key to `.env`**
+
    ```
    OPENAI_API_KEY=your-actual-api-key
    ```
 
 4. **Start the application**
+
    ```bash
    docker compose up --build
    ```
@@ -44,17 +47,20 @@ AI-powered summarization service for healthcare case notes using FastAPI and Lan
 ### Option 2: Local Development
 
 1. **Create a virtual environment**
+
    ```bash
    python3 -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
 2. **Install dependencies**
+
    ```bash
    pip install -r requirements.txt
    ```
 
 3. **Create your environment file**
+
    ```bash
    cp .env.example .env
    # Edit .env and add your OPENAI_API_KEY
@@ -68,22 +74,25 @@ AI-powered summarization service for healthcare case notes using FastAPI and Lan
 ## API Endpoints
 
 ### Health Check
+
 ```
 GET /health
 ```
 
 ### Summarize Case Notes
+
 ```
 POST /api/v2/ai-services/summarize
 ```
 
 **Request Body:**
+
 ```json
 {
   "caseId": "case-123",
   "notes": [
-    {"note": "Patient called regarding prescription refill..."},
-    {"note": "Contacted pharmacy to verify..."}
+    { "note": "Patient called regarding prescription refill..." },
+    { "note": "Contacted pharmacy to verify..." }
   ],
   "patientName": "John Doe",
   "assignedTo": "advocate-1",
@@ -94,6 +103,7 @@ POST /api/v2/ai-services/summarize
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -129,11 +139,13 @@ vitafy-ai-chat/
 ## Development
 
 ### Running Tests
+
 ```bash
 pytest
 ```
 
 ### Code Formatting
+
 ```bash
 black app/
 isort app/

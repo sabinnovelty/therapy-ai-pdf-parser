@@ -50,6 +50,11 @@ RUN playwright install chromium && \
 # Copy application code
 COPY app/ ./app/
 
+# Entrypoint: install deps from requirements.txt then run CMD (so new packages work without rebuild)
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
 # Create storage directories for RAG (vector DB, uploads, cache)
 RUN mkdir -p ./storage/raw_uploads ./storage/vector_db ./storage/markdown_cache
 
