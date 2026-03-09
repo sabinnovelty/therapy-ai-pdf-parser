@@ -32,6 +32,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  therapy-ai-client:
+    build:
+      context: ../therapi-ai-client
+      dockerfile: Dockerfile.dev
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    container_name: therapy-ai-client
+    ports:
+      - '5173:5173'
+    volumes:
+      # Mount source so edits on your machine trigger hot reload
+      - ../therapi-ai-client:/app
+      # Keep container node_modules (don't overwrite with host)
+      - therapy_client_node_modules:/app/node_modules
+    depends_on:
+      - vitafy-ai-chat
+    restart: unless-stopped
+
   mongo:
     image: mongo
     restart: always
@@ -65,3 +84,4 @@ services:
 volumes:
   mongodb_data:
   valkey_data:
+  therapy_client_node_modules:

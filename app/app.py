@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException,UploadFile,File
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.exceptions import RequestValidationError
 from dotenv import load_dotenv
 
@@ -142,6 +143,11 @@ async def root():
     }
 )
 
+async def health_check():
+    """Return the health status of the API service."""
+    return {"status": "healthy"}
+
+
 @app.post('/upload', tags=["Therapy Parser"])
 async def upload(file: UploadFile):
     """Upload a PDF. File is saved to storage/uploads/<file_id>/. An RQ worker must be running to process the PDF and save page images (visit-1-page-1.png, etc.) in the same folder. Poll GET /files/{file_id}/result for status and result."""
@@ -187,7 +193,60 @@ async def get_file_result(file_id: str):
         "result": doc.get("result"),
     }
 
-async def health_check():
-    """Return the health status of the API service."""
-    return {"status": "healthy"}
+@app.get('/documents', tags=["Therapy Parser"])
+async def get_all_documents():
+    """Return all documents from the database."""
+    documents = await files_collection.find().to_list(length=None)
+    for doc in documents:
+        doc["_id"] = str(doc["_id"])
+    return documents
+
+
+@app.get("/files/{file_id}/visit/{visit_number}", tags=["Therapy Parser"])
+async def get_visit_pages(file_id: str, visit_number: int):
+    """Return one visit's data and pages for a file. Use visit_number from result.visits[].visitNumber."""
+    from bson import ObjectId
+    try:
+        oid = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    doc = await files_collection.find_one(
+        {"_id": oid},
+        projection={"name": 1, "status": 1, "result": 1},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="File not found")
+    result = doc.get("result")
+    if not result or not isinstance(result.get("visits"), list):
+        raise HTTPException(status_code=404, detail="No visits data; file may still be processing.")
+    for v in result["visits"]:
+        if v.get("visitNumber") == visit_number:
+            return {
+                "file_id": file_id,
+                "document_name": doc.get("name"),
+                "visitNumber": v.get("visitNumber"),
+                "visitDate": v.get("visitDate"),
+                "pageCount": v.get("pageCount", 0),
+                "pages": v.get("pages", []),
+            }
+    raise HTTPException(status_code=404, detail=f"Visit {visit_number} not found for this file.")
+
+
+@app.get("/files/{file_id}/pages/{path:path}", tags=["Therapy Parser"])
+async def serve_visit_page_image(file_id: str, path: str):
+    """Serve a page image for a file (e.g. visit-17-page-1.png). Path must be a single filename under pages/."""
+    from bson import ObjectId
+    try:
+        ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    # Restrict to filename only (no slashes) to avoid path traversal
+    if "/" in path or path.startswith(".."):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    file_path = (STORAGE_DIR / "uploads" / file_id / "pages" / path).resolve()
+    root = (STORAGE_DIR / "uploads" / file_id).resolve()
+    if not file_path.is_file() or not str(file_path).startswith(str(root)):
+        raise HTTPException(status_code=404, detail="Page image not found")
+    return FileResponse(file_path, media_type="image/png")
+
 
