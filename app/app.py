@@ -142,20 +142,28 @@ async def root():
     }
 )
 
-@app.post('/upload')
+@app.post('/upload', tags=["Therapy Parser"])
 async def upload(file: UploadFile):
+    """Upload a PDF. File is saved to storage/uploads/<file_id>/. An RQ worker must be running to process the PDF and save page images (visit-1-page-1.png, etc.) in the same folder. Poll GET /files/{file_id}/result for status and result."""
     try:
         filename = file.filename or "upload"
         extension = os.path.splitext(filename)[1].lstrip(".").lower() or ""
+        if extension != "pdf":
+            raise HTTPException(status_code=400, detail="Only PDF files are accepted")
         doc: FileSchema = {"name": filename, "status": "saving", "extension": extension}
         db_file = await files_collection.insert_one(document=doc)
-        file_path = str(STORAGE_DIR / "uploads" / str(db_file.inserted_id) / filename)
+        # Use absolute path so the RQ worker (possibly different cwd) can find the file and save page images next to it
+        dir_path = (STORAGE_DIR / "uploads" / str(db_file.inserted_id)).resolve()
+        dir_path.mkdir(parents=True, exist_ok=True)
+        file_path = str(dir_path / filename)
         await save_to_disk(file=await file.read(), file_path=file_path)
 
         job = q.enqueue(process_file, str(db_file.inserted_id), file_path)
         await files_collection.update_one({"_id": db_file.inserted_id}, {"$set": {"status": "queued"}})
 
         return {"file_id": str(db_file.inserted_id)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
