@@ -2,6 +2,7 @@ from app.processors.base import BaseFileProcessor
 from app.db.collections.files import files_collection
 from app.utils.file import extract_text_from_pdf
 from bson import ObjectId
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -31,7 +32,7 @@ PAGE_NUMBER_PATTERNS = [
     re.compile(r"Page\s*:?\s*(\d+)", re.IGNORECASE),
 ]
 # For testing: only save this many page images (set to None to save all)
-MAX_PAGES_TO_SAVE = 4
+MAX_PAGES_TO_SAVE = 10
 
 
 def _find_visit_number_in_text(text: str) -> int | None:
@@ -201,41 +202,69 @@ class PDFTextProcessor(BaseFileProcessor):
             raise e
 
     async def process_pdf(self, id: str, file_path: str) -> dict:
-        """Extract visit number & date from each page. Save images as visit-26-page-20.png using the exact page number from the PDF when present."""
+        """Per page: save temp → OpenAI extracts visit #, date, page #. If no visit # → skip. If visit # found → save with extracted page #. Continuation pages (no visit #) → same visit, page number = previous + 1 (e.g. visit-26-page-3.png)."""
         doc = None
         try:
             doc = fitz.open(file_path)
-            visits_data = _extract_pages_with_visits(doc)  # list of (visit_num, date_str, list of (doc_page_num, page_num_from_doc or None))
             output_dir = Path(file_path).resolve().parent
-            output_dir.mkdir(parents=True, exist_ok=True)
+            pages_dir = output_dir / "pages"
+            pages_dir.mkdir(parents=True, exist_ok=True)
             total_pages = len(doc)
-            visits_result: list[dict] = []
+            last_page_number_per_visit: dict[int, int] = {}  # visit_number -> last page number used in filename
+            current_visit: int | None = None
+            current_date: str | None = None
+            current_date_iso: str = ""
+            visits_dict: dict[int, dict] = {}
             all_images_count = 0
-            for visit_number_doc, visit_date_str, page_list in visits_data:
-                visit_date_iso = _visit_date_to_iso(visit_date_str) if visit_date_str else ""
-                page_number_doc = page_list[0][0] if page_list else 0
-                page_count = len(page_list)
-                pages_in_visit: list[dict] = []
-                for page_idx, (doc_page_num, page_num_from_doc) in enumerate(page_list, start=1):
-                    if MAX_PAGES_TO_SAVE is not None and all_images_count >= MAX_PAGES_TO_SAVE:
-                        break
-                    # Use exact page number from PDF when extracted, else sequential index
-                    page_label = page_num_from_doc if page_num_from_doc is not None else page_idx
-                    image_name = f"visit-{visit_number_doc}-page-{page_label}.png"
-                    out_path = output_dir / image_name
-                    pix = doc[doc_page_num - 1].get_pixmap(dpi=150, alpha=False)
-                    pix.save(str(out_path))
-                    pages_in_visit.append({"pageNumber": doc_page_num, "pageLabel": page_label, "image": image_name})
-                    all_images_count += 1
-                visits_result.append({
-                    "visitNumber": visit_number_doc,
-                    "visitDate": visit_date_iso,
-                    "pageNumber": page_number_doc,
-                    "pageCount": page_count,
-                    "pages": pages_in_visit,
-                })
+            for i in range(total_pages):
                 if MAX_PAGES_TO_SAVE is not None and all_images_count >= MAX_PAGES_TO_SAVE:
                     break
+                await files_collection.update_one(
+                    {"_id": ObjectId(id)},
+                    {"$set": {"status": f"page {i + 1} processing"}},
+                )
+                page = doc[i]
+                temp_image = pages_dir / f"temp_{i}.png"
+                pix = page.get_pixmap(dpi=150, alpha=False)
+                pix.save(str(temp_image))
+                image_b64 = __import__("base64").b64encode(pix.tobytes("png")).decode("ascii")
+                visit_number, visit_date, page_number = _detect_visit_from_image(image_b64)
+                if visit_number is not None:
+                    current_visit = visit_number
+                    current_date = visit_date
+                    current_date_iso = _visit_date_to_iso(visit_date) if visit_date else ""
+                    if current_visit not in visits_dict:
+                        visits_dict[current_visit] = {"visitDate": current_date_iso, "pages": []}
+                    last_page_number_per_visit[current_visit] = page_number if page_number is not None else 1
+                    page_label = last_page_number_per_visit[current_visit]
+                else:
+                    if current_visit is None:
+                        temp_image.unlink(missing_ok=True)
+                        continue
+                    last_page_number_per_visit[current_visit] += 1
+                    page_label = last_page_number_per_visit[current_visit]
+                final_name = f"visit-{current_visit}-page-{page_label}.png"
+                final_path = pages_dir / final_name
+                if temp_image.exists():
+                    os.rename(str(temp_image), str(final_path))
+                else:
+                    pix.save(str(final_path))
+                visits_dict[current_visit]["pages"].append({
+                    "pageNumber": i + 1,
+                    "pageLabel": page_label,
+                    "image": f"pages/{final_name}",
+                })
+                all_images_count += 1
+            visits_result = [
+                {
+                    "visitNumber": vnum,
+                    "visitDate": data["visitDate"],
+                    "pageNumber": data["pages"][0]["pageNumber"] if data["pages"] else 0,
+                    "pageCount": len(data["pages"]),
+                    "pages": data["pages"],
+                }
+                for vnum, data in sorted(visits_dict.items())
+            ]
             result_data = {
                 "documentId": id,
                 "totalPages": total_pages,
@@ -334,6 +363,78 @@ def _ocr_visit_and_page_from_image(image_base64: str) -> tuple[int | None, int |
         return (visit_num, page_num)
     except Exception:
         return (None, None)
+
+
+def _detect_visit_from_image(image_base64: str) -> tuple[int | None, str | None, int | None]:
+    """Use OpenAI vision to extract Visit #, Visit date, and Page # from a full page image. High reliability.
+    Returns (visit_number, visit_date_str, page_number) - any can be None if not found.
+    Page number may appear as p.11, p.1, Page 1, Page #: 2, etc. — extract the numeric part only."""
+    from app.core.data import OPENAI_API_KEY
+    if not OPENAI_API_KEY:
+        return (None, None, None)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=128,
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Look at this document page image. Extract exactly these three values if visible:\n"
+                                "1) Visit # (or Visit number) - integer only, e.g. 17 or 26\n"
+                                "2) Visit date - in form MM/DD/YYYY or Month DD, YYYY\n"
+                                "3) Page # (or Page number) - the numeric page only. The page may be shown as "
+                                "'p.11', 'p.1', 'Page 1', 'Page #: 2', 'Page 11', etc. Return ONLY the number: "
+                                "e.g. for 'p.11' return 11, for 'p.1' or 'Page 1' return 1, for 'Page 5' return 5.\n"
+                                "Return ONLY three values separated by commas: visit_number,visit_date,page_number\n"
+                                "If a value is not visible use NONE for that field. Examples:\n"
+                                "26,02/10/2020,7\n"
+                                "17,NONE,11\n"
+                                "17,NONE,1\n"
+                                "31,12/26/2025,NONE"
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                        },
+                    ],
+                }
+            ],
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        if not raw or raw.upper() == "NONE":
+            return (None, None, None)
+        parts = [p.strip() for p in raw.split(",")]
+        while len(parts) < 3:
+            parts.append("NONE")
+        visit_num = None
+        if parts[0].replace("NONE", "").strip().isdigit():
+            visit_num = int(parts[0].strip())
+        visit_date = None if parts[1].upper() == "NONE" else parts[1].strip()
+        page_num = _parse_page_number_from_response(parts[2] if len(parts) > 2 else "NONE")
+        return (visit_num, visit_date, page_num)
+    except Exception:
+        return (None, None, None)
+
+
+def _parse_page_number_from_response(s: str) -> int | None:
+    """Extract numeric page from model response. Handles 'p.11' -> 11, 'p.1' -> 1, '11', 'Page 11', etc."""
+    if not s or s.upper() == "NONE":
+        return None
+    s = s.strip()
+    if s.isdigit():
+        return int(s)
+    m = re.search(r"\d+", s)
+    if m:
+        return int(m.group(0))
+    return None
 
 
 def _extract_pages_with_visits(doc: fitz.Document) -> list[tuple[int, str | None, list[tuple[int, int | None]]]]:
