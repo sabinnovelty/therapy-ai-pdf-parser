@@ -39,9 +39,9 @@ from app.api.endpoints.summarizer_router import router as summarizer_router
 from app.api.endpoints.rag_router import router as rag_router
 
 app = FastAPI(
-    title="Vitafy AI Chat API",
+    title="Therapy AI",
     description="""
-## Vitafy AI Chat API
+## Therapy AI
 
 AI-powered summarization and RAG service for healthcare case notes.
 
@@ -61,22 +61,10 @@ Currently, no authentication is required for API access.
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     openapi_tags=[
-        {
-            "name": "Summarization",
-            "description": "Operations for summarizing healthcare case notes using AI",
-        },
-        {
-            "name": "Advocacy",
-            "description": "Healthcare advocacy RAG operations",
-        },
-        {
-            "name": "Health",
-            "description": "Health check and status endpoints",
-        },
     ],
     contact={
-        "name": "Vitafy Support",
-        "email": "support@vitafy.com",
+        "name": "Therapy AI Support",
+        "email": "support@therapyai.com",
     },
     license_info={
         "name": "Proprietary",
@@ -104,9 +92,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(summarizer_router, prefix="/api/v2/ai-services", tags=["Summarization"])
-app.include_router(rag_router, tags=["Advocacy"])  # Prefix already defined in router
 
 # Register exception handlers
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -123,7 +108,7 @@ app.add_exception_handler(Exception, general_exception_handler)
 
 async def root():
     """Return a welcome message confirming the API is running."""
-    return {"message": "Welcome to Vitafy AI Chat API"}
+    return {"message": "Welcome to Therapy AI API"}
 
 
 @app.get(
@@ -174,7 +159,7 @@ async def upload(file: UploadFile):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/files/{file_id}/result", summary="Get processing result by file ID")
+@app.get("/files/{file_id}/result", summary="Get processing result by file ID" ,tags=["Therapy Parser"])
 async def get_file_result(file_id: str):
     """Return the stored processing result for an uploaded file, if available."""
     from bson import ObjectId

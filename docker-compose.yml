@@ -1,9 +1,9 @@
 services:
-  vitafy-ai-chat:
+  therapy-ai:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: vitafy-ai-chat
+    container_name: therapy-ai
     ports:
       - '${PORT:-8000}:${PORT:-8000}'
     environment:
@@ -48,7 +48,7 @@ services:
       # Keep container node_modules (don't overwrite with host)
       - therapy_client_node_modules:/app/node_modules
     depends_on:
-      - vitafy-ai-chat
+      - therapy-ai
     restart: unless-stopped
 
   mongo:

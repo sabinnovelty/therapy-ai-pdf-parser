@@ -387,17 +387,20 @@ def _detect_visit_from_image(image_base64: str) -> tuple[int | None, str | None,
                             "type": "text",
                             "text": (
                                 "Look at this document page image. Extract exactly these three values if visible:\n"
-                                "1) Visit # (or Visit number) - integer only, e.g. 17 or 26\n"
-                                "2) Visit date - in form MM/DD/YYYY or Month DD, YYYY\n"
+                                "1) Visit # (or Visit number) - integer only, e.g., 17 or 26\n"
+                                "2) Visit date - in form MM/DD/YYYY or Month DD, YYYY. "
+                                "Sometimes it may appear as 'Visit Date' or 'Date of Daily Note' or 'Date' in the document.\n"
                                 "3) Page # (or Page number) - the numeric page only. The page may be shown as "
-                                "'p.11', 'p.1', 'Page 1', 'Page #: 2', 'Page 11', etc. Return ONLY the number: "
-                                "e.g. for 'p.11' return 11, for 'p.1' or 'Page 1' return 1, for 'Page 5' return 5.\n"
+                                "'p.11', 'p.1', 'Page 1', 'Page #: 2', 'Page 11', '1 of 89', etc. Return ONLY the number: "
+                                "for 'p.11' return 11, for '1 of 89' return 1, for 'Page 1' return 1, for 'Page 5' return 5.\n"
                                 "Return ONLY three values separated by commas: visit_number,visit_date,page_number\n"
                                 "If a value is not visible use NONE for that field. Examples:\n"
                                 "26,02/10/2020,7\n"
                                 "17,NONE,11\n"
                                 "17,NONE,1\n"
-                                "31,12/26/2025,NONE"
+                                "31,12/26/2025,NONE\n"
+                                "\n"
+                                "IMPORTANT: For visit date, consider all labels like 'Visit Date', 'Date of Daily Note', or just 'Date'."
                             ),
                         },
                         {
