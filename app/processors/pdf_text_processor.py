@@ -216,6 +216,9 @@ class PDFTextProcessor(BaseFileProcessor):
             current_date_iso: str = ""
             visits_dict: dict[int, dict] = {}
             all_images_count = 0
+            # Buffer for pages with only visit date (no visit number); flushed when visit number is detected for same date.
+            # Each entry: (temp_image_path, page_index_0based, visit_date_str, visit_date_iso)
+            date_only_buffer: list[tuple[Path, int, str, str]] = []
             for i in range(total_pages):
                 if MAX_PAGES_TO_SAVE is not None and all_images_count >= MAX_PAGES_TO_SAVE:
                     break
@@ -230,14 +233,43 @@ class PDFTextProcessor(BaseFileProcessor):
                 image_b64 = __import__("base64").b64encode(pix.tobytes("png")).decode("ascii")
                 visit_number, visit_date, page_number = _detect_visit_from_image(image_b64)
                 if visit_number is not None:
+                    current_date_iso = _visit_date_to_iso(visit_date) if visit_date else ""
+                    # Flush buffer: assign all buffered pages with the same visit date to this visit
+                    if current_date_iso:
+                        to_flush = [(t, pi, vd, vdi) for (t, pi, vd, vdi) in date_only_buffer if vdi == current_date_iso]
+                        date_only_buffer = [(t, pi, vd, vdi) for (t, pi, vd, vdi) in date_only_buffer if vdi != current_date_iso]
+                        if to_flush:
+                            if visit_number not in visits_dict:
+                                visits_dict[visit_number] = {"visitDate": current_date_iso, "pages": []}
+                            for j, (tpath, pidx, _, _) in enumerate(to_flush):
+                                page_label = j + 1
+                                final_name = f"visit-{visit_number}-page-{page_label}.png"
+                                final_path = pages_dir / final_name
+                                if tpath.exists():
+                                    os.rename(str(tpath), str(final_path))
+                                else:
+                                    page = doc[pidx]
+                                    pix_buf = page.get_pixmap(dpi=150, alpha=False)
+                                    pix_buf.save(str(final_path))
+                                visits_dict[visit_number]["pages"].append({
+                                    "pageNumber": pidx + 1,
+                                    "pageLabel": page_label,
+                                    "image": f"pages/{final_name}",
+                                })
+                                all_images_count += 1
+                            last_page_number_per_visit[visit_number] = len(to_flush)
                     current_visit = visit_number
                     current_date = visit_date
-                    current_date_iso = _visit_date_to_iso(visit_date) if visit_date else ""
                     if current_visit not in visits_dict:
                         visits_dict[current_visit] = {"visitDate": current_date_iso, "pages": []}
-                    last_page_number_per_visit[current_visit] = page_number if page_number is not None else 1
+                    last_page_number_per_visit[current_visit] = page_number if page_number is not None else (last_page_number_per_visit.get(current_visit, 0) + 1)
                     page_label = last_page_number_per_visit[current_visit]
                 else:
+                    if visit_date is not None:
+                        # Only visit date, no visit number: buffer for later assignment when visit number is detected
+                        date_iso = _visit_date_to_iso(visit_date)
+                        date_only_buffer.append((temp_image, i, visit_date, date_iso))
+                        continue
                     if current_visit is None:
                         temp_image.unlink(missing_ok=True)
                         continue
@@ -366,9 +398,9 @@ def _ocr_visit_and_page_from_image(image_base64: str) -> tuple[int | None, int |
 
 
 def _detect_visit_from_image(image_base64: str) -> tuple[int | None, str | None, int | None]:
-    """Use OpenAI vision to extract Visit #, Visit date, and Page # from a full page image. High reliability.
+    """Use OpenAI vision to extract Visit #, Visit date, and Page # from a full page image.
     Returns (visit_number, visit_date_str, page_number) - any can be None if not found.
-    Page number may appear as p.11, p.1, Page 1, Page #: 2, etc. — extract the numeric part only."""
+    Visit number is ONLY from fields labeled 'Visit #' / 'Visit Number'; never from page numbers."""
     from app.core.data import OPENAI_API_KEY
     if not OPENAI_API_KEY:
         return (None, None, None)
@@ -386,21 +418,27 @@ def _detect_visit_from_image(image_base64: str) -> tuple[int | None, str | None,
                         {
                             "type": "text",
                             "text": (
-                                "Look at this document page image. Extract exactly these three values if visible:\n"
-                                "1) Visit # (or Visit number) - integer only, e.g., 17 or 26\n"
-                                "2) Visit date - in form MM/DD/YYYY or Month DD, YYYY. "
-                                "Sometimes it may appear as 'Visit Date' or 'Date of Daily Note' or 'Date' in the document.\n"
-                                "3) Page # (or Page number) - the numeric page only. The page may be shown as "
-                                "'p.11', 'p.1', 'Page 1', 'Page #: 2', 'Page 11', '1 of 89', etc. Return ONLY the number: "
-                                "for 'p.11' return 11, for '1 of 89' return 1, for 'Page 1' return 1, for 'Page 5' return 5.\n"
+                                "Look at this document page image and extract exactly three values.\n\n"
+                                "1) VISIT NUMBER (visit_number)\n"
+                                "   - ONLY use a number that is explicitly the value for a field labeled:\n"
+                                "     'Visit #', 'Visit #:', 'Visit Number', 'Visit No.', or the word 'Visit' followed by a number that is the visit identifier.\n"
+                                "   - The number MUST appear next to or under such a label. It is the visit ID (e.g. 17, 26, 31), not a page index.\n"
+                                "   - DO NOT use: numbers from 'Page 2', 'Page #: 2', 'p.2', '2 of 9', 'page 2 of 10', or any page counter. Those are PAGE numbers.\n"
+                                "   - If you do not see a clearly labeled Visit # / Visit Number field, or you are unsure, return NONE for visit_number. Do not guess.\n\n"
+                                "2) VISIT DATE (visit_date)\n"
+                                "   - Use dates under labels like 'Visit Date', 'Date of Daily Note', 'Date of Visit', or 'Date'. Format as MM/DD/YYYY or Month DD, YYYY.\n"
+                                "   - If not visible, return NONE.\n\n"
+                                "3) PAGE NUMBER (page_number)\n"
+                                "   - The numeric page of the document: from 'Page 1', 'Page #: 2', 'p.11', '1 of 89', etc. Return only the number (e.g. 1, 2, 11).\n"
+                                "   - If not visible, return NONE.\n\n"
                                 "Return ONLY three values separated by commas: visit_number,visit_date,page_number\n"
-                                "If a value is not visible use NONE for that field. Examples:\n"
+                                "Use NONE for any value not clearly present. Examples:\n"
                                 "26,02/10/2020,7\n"
+                                "NONE,12/26/2025,3\n"
                                 "17,NONE,11\n"
-                                "17,NONE,1\n"
-                                "31,12/26/2025,NONE\n"
-                                "\n"
-                                "IMPORTANT: For visit date, consider all labels like 'Visit Date', 'Date of Daily Note', or just 'Date'."
+                                "NONE,NONE,NONE\n"
+                                "31,12/26/2025,NONE\n\n"
+                                "CRITICAL: If the only number you see is from 'Page X' or 'p.X' or 'X of Y', do NOT put it in visit_number. Put it only in page_number, and use NONE for visit_number."
                             ),
                         },
                         {
