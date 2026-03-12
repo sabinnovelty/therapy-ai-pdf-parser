@@ -10,6 +10,9 @@ from app.utils.exception_handlers import (
     http_exception_handler,
     general_exception_handler,
 )
+
+from PIL import Image
+
 from app.core.config import configure_rag_settings, validate_rag_environment
 from app.core.storage import setup_storage
 from app.core.data import STORAGE_DIR
@@ -22,6 +25,10 @@ from app.utils.file import save_to_disk
 from app.db.collections.files import files_collection,FileSchema
 from app.queue.queue import q
 from app.queue.worker import process_file
+
+from app.schemas.ExportVisitSchema import ExportVisitsRequest
+
+from pathlib import Path
 
 # Load environment variables from .env file
 load_dotenv()
@@ -149,7 +156,7 @@ async def upload(file: UploadFile):
         file_path = str(dir_path / filename)
         await save_to_disk(file=await file.read(), file_path=file_path)
 
-        job = q.enqueue(process_file, str(db_file.inserted_id), file_path)
+        job = q.enqueue(process_file, str(db_file.inserted_id), file_path, job_timeout="1h")
         await files_collection.update_one({"_id": db_file.inserted_id}, {"$set": {"status": "queued"}})
 
         return {"file_id": str(db_file.inserted_id)}
@@ -225,13 +232,67 @@ async def serve_visit_page_image(file_id: str, path: str):
         ObjectId(file_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid file_id")
-    # Restrict to filename only (no slashes) to avoid path traversal
     if "/" in path or path.startswith(".."):
         raise HTTPException(status_code=400, detail="Invalid path")
-    file_path = (STORAGE_DIR / "uploads" / file_id / "pages" / path).resolve()
     root = (STORAGE_DIR / "uploads" / file_id).resolve()
+    file_path = (root / "pages" / path).resolve()
     if not file_path.is_file() or not str(file_path).startswith(str(root)):
         raise HTTPException(status_code=404, detail="Page image not found")
-    return FileResponse(file_path, media_type="image/png")
+    return FileResponse(path=str(file_path), media_type="image/png")
 
+
+#@app.post("/files/{file_id}/export-selected-visits", tags=["Therapy Parser"])
+@app.post("/files/{file_id}/export-selected-visits-pdf", tags=["Therapy Parser"])
+async def export_selected_visits(file_id: str, body: ExportVisitsRequest):
+    """Export selected visits as one PDF. Saves under STORAGE_DIR/exports and returns file for download."""
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        ObjectId(file_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    
+    if not body.visits:
+        raise HTTPException(status_code=400, detail="No visits selected")
+
+    visits = sorted(body.visits)
+
+    base_dir = (STORAGE_DIR / "uploads" / file_id / "pages").resolve()
+
+    exports_dir = (STORAGE_DIR / "exports").resolve()
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    pdf_name = f"{file_id}-visits-{','.join(map(str, body.visits))}.pdf"
+    output_pdf_path = exports_dir / pdf_name
+    print("PDF Name*****:", pdf_name)
+    if output_pdf_path.exists():
+        return FileResponse(path=str(output_pdf_path), media_type="application/pdf", filename=pdf_name)
+
+    if not base_dir.exists():
+        raise HTTPException(status_code=404, detail="Base directory not found")
+
+    all_images = []
+    for visit in visits:
+        visit_files = sorted(base_dir.glob(f"visit-{visit}-page-*.png"))
+        if not visit_files:
+            raise HTTPException(status_code=404, detail=f"Visit {visit} not found")
+        for image_path in visit_files:
+            img = Image.open(str(image_path)).convert("RGB")
+            all_images.append(img)
+
+    if not all_images:
+        raise HTTPException(status_code=404, detail="No images found")
+
+    exports_dir = (STORAGE_DIR / "exports").resolve()
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    pdf_name = f"{file_id}-visits-{','.join(map(str, body.visits))}.pdf"
+    output_pdf_path = exports_dir / pdf_name
+    all_images[0].save(str(output_pdf_path), save_all=True, append_images=all_images[1:])
+
+    download_name = f"selected-visits-{file_id}.pdf"
+    return FileResponse(
+        path=str(output_pdf_path),
+        media_type="application/pdf",
+        filename=download_name,
+    )
 

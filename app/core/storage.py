@@ -73,7 +73,7 @@ def get_storage_client():
 
 
 def setup_storage():
-    folders = ["raw_uploads", "uploads", "vector_db", "markdown_cache"]
+    folders = ["raw_uploads", "uploads", "vector_db", "markdown_cache", "exports"]
     for folder in folders:
         (STORAGE_DIR / folder).mkdir(parents=True, exist_ok=True)
 
