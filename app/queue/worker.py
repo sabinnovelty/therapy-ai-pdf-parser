@@ -22,7 +22,7 @@ async def _process_file_async(id: str, file_path: str):
         return
     processor = ProcessorFactory.get_processor("pdf_text")
     try:
-        processor_result = await processor.process_pdf(id, abs_path)
+        processor_result = await processor.process(id, abs_path)
         n_visits = len(processor_result.get("visits", []))
         n_images = sum(len(v.get("pages", [])) for v in processor_result.get("visits", []))
         print(f"Processing file: {id} -> {n_visits} visits, {n_images} page images saved")
