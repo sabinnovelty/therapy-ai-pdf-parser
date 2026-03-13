@@ -1,6 +1,6 @@
 # Docker Setup Instructions
 
-This document provides instructions for building and running the Vitafy AI Chat API using Docker.
+This document provides instructions for building and running the Therapy AI Pdf Parser API using Docker.
 
 ## Prerequisites
 
@@ -132,11 +132,13 @@ Once the container is running, access:
 ### Container Fails to Start
 
 1. **Check logs**:
+
    ```bash
    docker-compose logs vitafy-ai-chat
    ```
 
 2. **Verify environment variables**:
+
    ```bash
    docker-compose config
    ```
@@ -151,6 +153,7 @@ Once the container is running, access:
 If you see `ModuleNotFoundError`, ensure:
 
 1. Requirements are installed during build:
+
    ```bash
    docker-compose build --no-cache
    ```
@@ -162,11 +165,13 @@ If you see `ModuleNotFoundError`, ensure:
 If the vector database is corrupted:
 
 1. Stop the container:
+
    ```bash
    docker-compose down
    ```
 
 2. Remove the vector database:
+
    ```bash
    rm -rf ./storage/vector_db/*
    ```

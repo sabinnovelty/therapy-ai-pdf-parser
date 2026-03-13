@@ -26,7 +26,7 @@ from app.db.collections.files import files_collection,FileSchema
 from app.queue.queue import q
 from app.queue.worker import process_file
 
-from app.schemas.ExportVisitSchema import ExportVisitsRequest
+from app.schemas.export_visit_schema import ExportVisitsRequest
 
 from pathlib import Path
 

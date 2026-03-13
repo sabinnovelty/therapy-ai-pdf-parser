@@ -1,4 +1,4 @@
-# Vitafy AI Chat
+# Therapy AI Pdf Parser
 
 AI-powered summarization service for healthcare case notes using FastAPI and LangChain.
 

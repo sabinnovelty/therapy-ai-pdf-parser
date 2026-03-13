@@ -410,7 +410,7 @@ components:
           schema:
             $ref: '#/components/schemas/MessageResponse'
           example:
-            message: 'Welcome to Vitafy AI Chat API'
+            message: 'Welcome to Therapy AI Pdf Parser API'
 
     HealthStatus:
       description: Service is healthy
