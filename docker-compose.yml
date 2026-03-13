@@ -79,8 +79,15 @@ services:
       - ./app:/app/app
       - ./requirements.txt:/app/requirements.txt
       - ./storage:/app/storage
+  rq-dashboard:
+    image: eoranged/rq-dashboard:latest
     ports:
-      - 8001:8000
+      - '9181:9181'
+    environment:
+      - RQ_DASHBOARD_REDIS_URL=redis://valkey:6379
+    depends_on:
+      - worker
+
 volumes:
   mongodb_data:
   valkey_data:
