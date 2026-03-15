@@ -203,60 +203,221 @@ class PDFTextProcessor(BaseFileProcessor):
             raise e
 
     async def process_pdf(self, id: str, file_path: str) -> dict:
-        """Simple synchronous flow: for each page, get visit number from model. If not found, skip. If found, save as visit-{number}-page-{number}.png. No buffering or continuation."""
+        import os
+        import base64
+        import fitz
+        from pathlib import Path
+        from bson import ObjectId
+
         doc = None
+
         try:
             doc = fitz.open(file_path)
+
             output_dir = Path(file_path).resolve().parent
             pages_dir = output_dir / "pages"
             pages_dir.mkdir(parents=True, exist_ok=True)
+
             total_pages = len(doc)
-            # visit_number -> next page label to use (1-based) for filename
-            next_page_label_per_visit: dict[int, int] = {}
-            visits_dict: dict[int, dict] = {}
-            all_images_count = 0
+
+            visits_dict = {}
+
+            current_visit_number = None
+            current_visit_page_counter = 1
+            current_visit_date = None  # date of the visit we're currently in (for continuation check)
+            used_page_numbers_in_visit = set()  # document page numbers already used in filename (avoid duplicates)
+
+            buffer_pages = []
 
             for i in range(total_pages):
-                # if MAX_PAGES_TO_SAVE is not None and all_images_count >= MAX_PAGES_TO_SAVE:
-                #     break
+
                 await files_collection.update_one(
                     {"_id": ObjectId(id)},
-                    {"$set": {"status": f"page {i + 1}/{total_pages}"}},
+                    {"$set": {"status": f"page {i+1}/{total_pages}"}},
                 )
+
                 page = doc[i]
+
                 temp_image = pages_dir / f"temp_{i}.png"
+
                 pix = page.get_pixmap(dpi=150, alpha=False)
                 pix.save(str(temp_image))
-                image_b64 = __import__("base64").b64encode(pix.tobytes("png")).decode("ascii")
+
+                image_b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
 
                 visit_number, visit_date, page_number = _detect_visit_from_image(image_b64)
-                print(f"[Page {i + 1}/{total_pages}] visit_number={visit_number}, visit_date={visit_date!r}, page_number={page_number}")
 
-                if visit_number is None:
+                print(
+                    f"[Page {i+1}] visit_number={visit_number}, visit_date={visit_date}, page_number={page_number}"
+                )
+
+                # -------------------------------------------------
+                # CASE 1: Nothing found → skip
+                # -------------------------------------------------
+                if visit_number is None and visit_date is None and current_visit_number is None:
                     temp_image.unlink(missing_ok=True)
-                    print(f"[Page {i + 1}/{total_pages}] skipped (no visit number)")
+                    print(f"[Page {i+1}] skipped (no visit info)")
                     continue
 
-                page_label = next_page_label_per_visit.get(visit_number, 1)
-                next_page_label_per_visit[visit_number] = page_label + 1
+                # -------------------------------------------------
+                # CASE 2: Visit date but no visit number → buffer
+                # -------------------------------------------------
+                if visit_number is None and visit_date is not None and current_visit_number is None:
+                    buffer_pages.append(
+                        {
+                            "index": i,
+                            "temp_path": temp_image,
+                            "visit_date": visit_date,
+                            "page_number": page_number,  # page number found on PDF (for filename/label)
+                        }
+                    )
 
-                final_name = f"visit-{visit_number}-page-{page_label}.png"
-                final_path = pages_dir / final_name
-                if temp_image.exists():
-                    os.rename(str(temp_image), str(final_path))
-                else:
-                    pix.save(str(final_path))
-                print(f"[Page {i + 1}/{total_pages}] saved as {final_name}")
+                    print(f"[Page {i+1}] buffered waiting for visit number")
+                    continue
 
-                if visit_number not in visits_dict:
-                    visit_date_iso = _visit_date_to_iso(visit_date) if visit_date else ""
-                    visits_dict[visit_number] = {"visitDate": visit_date_iso, "pages": []}
-                visits_dict[visit_number]["pages"].append({
-                    "pageNumber": i + 1,
-                    "pageLabel": page_label,
-                    "image": f"pages/{final_name}",
-                })
-                all_images_count += 1
+                # -------------------------------------------------
+                # CASE 3: Visit number found
+                # -------------------------------------------------
+                if visit_number is not None:
+
+                    current_visit_number = visit_number
+                    current_visit_page_counter = 1
+                    used_page_numbers_in_visit = set()
+                    current_visit_date = (
+                        visit_date
+                        if visit_date
+                        else (buffer_pages[0]["visit_date"] if buffer_pages else None)
+                    )
+
+                    def _page_num_for_filename(doc_page_num: int | None, fallback: int) -> int:
+                        """Use document page number if available and not already used; else fallback."""
+                        if doc_page_num is not None and doc_page_num not in used_page_numbers_in_visit:
+                            used_page_numbers_in_visit.add(doc_page_num)
+                            return doc_page_num
+                        return fallback
+
+                    # process buffered pages first
+                    if buffer_pages:
+
+                        print(f"Processing {len(buffer_pages)} buffered pages")
+
+                        for buf in buffer_pages:
+                            doc_pnum = buf.get("page_number")
+                            label = _page_num_for_filename(doc_pnum, current_visit_page_counter)
+                            final_name = f"visit-{visit_number}-page-{label}.png"
+                            final_path = pages_dir / final_name
+
+                            os.rename(buf["temp_path"], final_path)
+
+                            if visit_number not in visits_dict:
+                                visit_date_iso = (
+                                    _visit_date_to_iso(buf["visit_date"])
+                                    if buf["visit_date"]
+                                    else ""
+                                )
+
+                                visits_dict[visit_number] = {
+                                    "visitDate": visit_date_iso,
+                                    "pages": [],
+                                }
+
+                            visits_dict[visit_number]["pages"].append(
+                                {
+                                    "pageNumber": buf["index"] + 1,
+                                    "pageLabel": doc_pnum if doc_pnum is not None else current_visit_page_counter,
+                                    "image": f"pages/{final_name}",
+                                }
+                            )
+
+                            current_visit_page_counter += 1
+
+                        buffer_pages.clear()
+
+                    doc_pnum = page_number
+                    label = _page_num_for_filename(doc_pnum, current_visit_page_counter)
+                    final_name = f"visit-{visit_number}-page-{label}.png"
+                    final_path = pages_dir / final_name
+
+                    os.rename(temp_image, final_path)
+
+                    if visit_number not in visits_dict:
+                        visit_date_iso = _visit_date_to_iso(visit_date) if visit_date else ""
+
+                        visits_dict[visit_number] = {
+                            "visitDate": visit_date_iso,
+                            "pages": [],
+                        }
+
+                    visits_dict[visit_number]["pages"].append(
+                        {
+                            "pageNumber": i + 1,
+                            "pageLabel": doc_pnum if doc_pnum is not None else current_visit_page_counter,
+                            "image": f"pages/{final_name}",
+                        }
+                    )
+
+                    current_visit_page_counter += 1
+
+                    print(f"[Page {i+1}] saved as {final_name}")
+
+                    continue
+
+                # -------------------------------------------------
+                # CASE 4: Page has a visit date but no visit number → not continuation of previous; reset and buffer (new segment)
+                # -------------------------------------------------
+                if (
+                    visit_number is None
+                    and current_visit_number is not None
+                    and visit_date is not None
+                    and (
+                        current_visit_date is None
+                        or visit_date.strip() != current_visit_date.strip()
+                    )
+                ):
+                    current_visit_number = None
+                    current_visit_page_counter = 1
+                    current_visit_date = None
+                    used_page_numbers_in_visit = set()
+                    buffer_pages.append(
+                        {
+                            "index": i,
+                            "temp_path": temp_image,
+                            "visit_date": visit_date,
+                            "page_number": page_number,
+                        }
+                    )
+                    print(f"[Page {i+1}] new date, buffered (not continuation of previous visit)")
+                    continue
+
+                # -------------------------------------------------
+                # CASE 5: Continuation page (same visit, no new visit number)
+                # -------------------------------------------------
+                if visit_number is None and current_visit_number is not None:
+                    doc_pnum = page_number
+                    if doc_pnum is not None and doc_pnum not in used_page_numbers_in_visit:
+                        used_page_numbers_in_visit.add(doc_pnum)
+                        label = doc_pnum
+                    else:
+                        label = current_visit_page_counter
+
+                    final_name = f"visit-{current_visit_number}-page-{label}.png"
+                    final_path = pages_dir / final_name
+
+                    os.rename(temp_image, final_path)
+
+                    visits_dict[current_visit_number]["pages"].append(
+                        {
+                            "pageNumber": i + 1,
+                            "pageLabel": doc_pnum if doc_pnum is not None else current_visit_page_counter,
+                            "image": f"pages/{final_name}",
+                        }
+                    )
+
+                    current_visit_page_counter += 1
+
+                    print(f"[Page {i+1}] continuation saved as {final_name}")
+
+                    continue
 
             visits_result = [
                 {
@@ -268,26 +429,32 @@ class PDFTextProcessor(BaseFileProcessor):
                 }
                 for vnum, data in sorted(visits_dict.items())
             ]
+
             result_data = {
                 "documentId": id,
                 "totalPages": total_pages,
                 "visits": visits_result,
             }
+
             await files_collection.update_one(
                 {"_id": ObjectId(id)},
                 {"$set": {"status": "completed", "result": result_data}},
             )
+
             return result_data
+
         except Exception as e:
+
             await files_collection.update_one(
                 {"_id": ObjectId(id)},
                 {"$set": {"status": "failed", "error": str(e)}},
             )
+
             raise e
+
         finally:
             if doc is not None:
                 doc.close()
-
 
 def _ocr_visit_date_from_image(image_base64: str) -> str | None:
     """Optional: use OpenAI vision to extract 'Visit Date:' from a page image. Returns None if no key or failure."""
