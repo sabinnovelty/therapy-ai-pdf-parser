@@ -54,6 +54,19 @@ def _find_page_number_in_text(text: str) -> int | None:
     return None
 
 
+def _get_visit_date_from_text(text: str) -> str | None:
+    """Extract visit date from text. Same patterns as _DETECT_VISIT_PROMPT: 'Visit Date: ...' or 'Visit: MM/DD/YYYY'."""
+    if not text or not text.strip():
+        return None
+    m = VISIT_DATE_PATTERN.search(text)
+    if m:
+        return m.group(1).strip()
+    m = VISIT_DATE_INLINE_PATTERN.search(text)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
 def _visit_date_to_iso(date_str: str) -> str:
     """Convert 'Dec 26, 2025' or '12/26/2025' to ISO date '2025-12-26'."""
     from datetime import datetime
@@ -534,6 +547,53 @@ def _ocr_visit_and_page_from_image(image_base64: str) -> tuple[int | None, int |
     except Exception:
         return (None, None)
 
+def _detect_visit_from_image_textract(image_base64: str) -> tuple[int | None, str | None, int | None]:
+    """Use AWS Textract to get text from the page image, then apply same patterns as _DETECT_VISIT_PROMPT
+    (visit number, visit date, page number). Returns (visit_number, visit_date_str, page_number)."""
+    from app.core.data import (
+        AWS_ACCESS_KEY_ID,
+        AWS_REGION,
+        AWS_SECRET_ACCESS_KEY,
+        AWS_TEXTRACT_ENABLED,
+    )
+    if not AWS_TEXTRACT_ENABLED:
+        return (None, None, None)
+    try:
+        import base64
+        import boto3
+        image_bytes = base64.b64decode(image_base64)
+        # Use credentials from config when set; otherwise boto3 uses env / profile / IAM role
+        client_kwargs = {"region_name": AWS_REGION}
+        if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+            client_kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
+            client_kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
+        client = boto3.client("textract", **client_kwargs)
+        resp = client.detect_document_text(Document={"Bytes": image_bytes})
+        lines = []
+        for block in resp.get("Blocks", []):
+            if block.get("BlockType") == "LINE":
+                text = (block.get("Text") or "").strip()
+                if text:
+                    lines.append(text)
+        combined = " ".join(lines)
+        combined = re.sub(r"\s+", " ", combined).strip()
+        # Print Textract raw output (truncate if long)
+        _max_preview = 500
+        preview = combined[:_max_preview] + ("..." if len(combined) > _max_preview else "")
+        print("[Textract] output (%d lines, %d chars): %s" % (len(lines), len(combined), repr(preview)))
+        visit_number = _find_visit_number_in_text(combined)
+        visit_date = _get_visit_date_from_text(combined)
+        page_number = _find_page_number_in_text(combined)
+        print("[Textract] parsed visit_number=%s visit_date=%s page_number=%s" % (
+            visit_number, visit_date, page_number))
+        return (visit_number, visit_date, page_number)
+    except Exception as e:
+        print("[Textract] error: %s" % (e,))
+        if "UnrecognizedClientException" in type(e).__name__ or "security token" in str(e).lower():
+            print("[Textract] hint: check AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (invalid or expired token)")
+        return (None, None, None)
+
+
 def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str | None, int | None]:
     """Use Gemini to extract Visit #, Visit date, and Page # from a full page image.
     Returns (visit_number, visit_date_str, page_number) - any can be None if not found.
@@ -578,12 +638,14 @@ def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str 
 
 
 def _detect_visit_from_image(image_base64: str) -> tuple[int | None, str | None, int | None]:
-    """Try Gemini first if key is set; else or on all-None result use OpenAI. Returns (visit_number, visit_date_str, page_number)."""
-    from app.core.data import GEMINI_API_KEY, OPENAI_API_KEY
-    if GEMINI_API_KEY:
-        out = _detect_visit_from_image_gemini(image_base64)
+    """Use AWS Textract first (same patterns as _DETECT_VISIT_PROMPT). If disabled or no result, fall back to OpenAI. Gemini no longer used."""
+    from app.core.data import AWS_TEXTRACT_ENABLED, OPENAI_API_KEY
+    if AWS_TEXTRACT_ENABLED:
+        out = _detect_visit_from_image_textract(image_base64)
         if out != (None, None, None):
             return out
+        if OPENAI_API_KEY:
+            print("[Vision] Textract returned no result, using OpenAI fallback")
     if OPENAI_API_KEY:
         return _detect_visit_from_image_openai(image_base64)
     return (None, None, None)

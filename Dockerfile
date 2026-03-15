@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Use Python 3.12 slim image
 FROM python:3.12-slim
 
@@ -39,9 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Install Python deps: use pip cache mount (faster rebuilds) + uv (faster installs)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip uv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt
 
 # Install Playwright browsers during build
 RUN playwright install chromium && \

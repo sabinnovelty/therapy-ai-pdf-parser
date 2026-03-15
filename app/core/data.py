@@ -8,6 +8,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LLAMA_API_KEY = os.getenv("LLAMA_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# AWS Textract (replaces Gemini for visit/date/page extraction from page images)
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_TEXTRACT_ENABLED = os.getenv("AWS_TEXTRACT_ENABLED", "true").lower() in ("1", "true", "yes")
+
 OPENAI_EMBEDDING_MODEL_DIMENSIONS = {
     "text-embedding-3-small": 1024,
     "text-embedding-3-large": 3072,

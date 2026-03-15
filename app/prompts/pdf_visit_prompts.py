@@ -1,3 +1,26 @@
+# =============================================================================
+# PATTERNS FOR VISIT / DATE / PAGE EXTRACTION (used by AWS Textract + regex)
+# Derived from _DETECT_VISIT_PROMPT so Textract applies the same rules as Gemini.
+# =============================================================================
+#
+# 1) VISIT NUMBER
+#    - Labels on page: "Visit #", "Visit #:", "Visit Number", "Visits", "Visits :",
+#      "Visit No.", or "Visit" followed by the number (visit ID: 17, 26, 31).
+#    - Must be next to or under such a label. Do NOT use numbers from page counters.
+#    - Exclude: "Page 2", "Page #: 2", "p.2", "2 of 9", "page 2 of 10" → those are PAGE.
+#    Regex: (?:Visit|visti)\s*#\s*:?\s*(\d+), (?:Visit|visti)\s+(\d+), etc. (see pdf_text_processor).
+#
+# 2) VISIT DATE
+#    - Labels: "Visit Date", "Date of Daily Note", "Date of Visit", "Date".
+#    - Formats: MM/DD/YYYY or Month DD, YYYY. Also "Visit:\n02/10/2020".
+#    Regex: Visit\s*Date\s*:?\s*(...), Visit\s*:\s*(\d{1,2}/\d{1,2}/\d{2,4}).
+#
+# 3) PAGE NUMBER
+#    - From: "Page 1", "Page #: 2", "p.11", "1 of 89". Return the number only.
+#    Regex: Page\s*#\s*:?\s*(\d+), Page\s*:?\s*(\d+).
+#
+# =============================================================================
+
 _DETECT_VISIT_PROMPT = """
  "Look at this document page image and extract exactly three values.\n\n"
                                 "1) VISIT NUMBER (visit_number)\n"
