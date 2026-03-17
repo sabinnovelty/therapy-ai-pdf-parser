@@ -6,7 +6,7 @@ import os
 import re
 from collections import defaultdict
 from pathlib import Path
-from app.prompts.pdf_visit_prompts import _DETECT_VISIT_PROMPT
+from app.prompts.pdf_visit_prompts import _DETECT_VISIT_PROMPT, DEBUG_EXTRACT_PAGE_TEXT_PROMPT
 
 import fitz  # PyMuPDF
 
@@ -244,6 +244,9 @@ class PDFTextProcessor(BaseFileProcessor):
                 pix.save(str(temp_image))
 
                 image_b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
+                # page_text = get_page_text_via_gemini(image_b64)
+                # print(f"Page text****: {page_text}")
+
 
                 visit_number, visit_date, page_number = _detect_visit_from_image(image_b64)
 
@@ -456,83 +459,31 @@ class PDFTextProcessor(BaseFileProcessor):
             if doc is not None:
                 doc.close()
 
-def _ocr_visit_date_from_image(image_base64: str) -> str | None:
-    """Optional: use OpenAI vision to extract 'Visit Date:' from a page image. Returns None if no key or failure."""
-    from app.core.data import OPENAI_API_KEY
-    if not OPENAI_API_KEY:
-        return None
+def get_page_text_via_gemini(image_base64: str) -> str:
+    """Ask Gemini to return all text it sees on the page image. Used for debugging visit number detection."""
+    from app.core.data import GEMINI_API_KEY
+    if not GEMINI_API_KEY:
+        return "(GEMINI_API_KEY not set)"
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            max_tokens=64,
-            temperature=0,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Look at this image. Find the field labeled 'Visit Date:' and return ONLY the date value (e.g. Dec 26, 2025). If not visible return: NONE",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_base64}"},
-                        },
-                    ],
-                }
-            ],
+        import base64
+        import io
+        import google.generativeai as genai
+        from PIL import Image
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        image_bytes = base64.b64decode(image_base64)
+        img = Image.open(io.BytesIO(image_bytes))
+        resp = model.generate_content(
+            [DEBUG_EXTRACT_PAGE_TEXT_PROMPT, img],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=2048,
+                temperature=0,
+            ),
         )
-        text = (resp.choices[0].message.content or "").strip()
-        if not text or text.upper() == "NONE":
-            return None
-        return text
-    except Exception:
-        return None
+        return (resp.text or "").strip() or "(empty response)"
+    except Exception as e:
+        return f"(error: {e})"
 
-
-def _ocr_visit_and_page_from_image(image_base64: str) -> tuple[int | None, int | None]:
-    """Use OpenAI vision to extract Visit # and Page # from top of page. Returns (visit_num, page_num) or (None, None)."""
-    from app.core.data import OPENAI_API_KEY
-    if not OPENAI_API_KEY:
-        return (None, None)
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            max_tokens=128,
-            temperature=0,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Look at this image of the top of a document page. Find the field for Visit # (or Visit number) and the field for Page # (or Page number). Return ONLY two numbers separated by a comma: visit_number,page_number. Example: 17,2. If only one is visible return it with a comma: 17, or ,2. If neither visible return: NONE",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_base64}"},
-                        },
-                    ],
-                }
-            ],
-        )
-        text = (resp.choices[0].message.content or "").strip()
-        if not text or text.upper() == "NONE":
-            return (None, None)
-        parts = text.replace(" ", "").split(",")
-        visit_num = None
-        page_num = None
-        if len(parts) >= 1 and parts[0].strip().isdigit():
-            visit_num = int(parts[0].strip())
-        if len(parts) >= 2 and parts[1].strip().isdigit():
-            page_num = int(parts[1].strip())
-        return (visit_num, page_num)
-    except Exception:
-        return (None, None)
 
 def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str | None, int | None]:
     """Use Gemini to extract Visit #, Visit date, and Page # from a full page image.
@@ -547,7 +498,7 @@ def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str 
         import google.generativeai as genai
         from PIL import Image
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         image_bytes = base64.b64decode(image_base64)
         img = Image.open(io.BytesIO(image_bytes))
         resp = model.generate_content(
@@ -558,6 +509,7 @@ def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str 
             ),
         )
         raw = (resp.text or "").strip()
+        print(f"Gemini response: {raw}")
         if not raw or raw.upper() == "NONE":
             print("[Gemini] raw:", raw or "(empty/NONE)")
             print("[Gemini] parsed: visit_number=None, visit_date=None, page_number=None")
@@ -565,9 +517,7 @@ def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str 
         parts = [p.strip() for p in raw.split(",")]
         while len(parts) < 3:
             parts.append("NONE")
-        visit_num = None
-        if parts[0].replace("NONE", "").strip().isdigit():
-            visit_num = int(parts[0].strip())
+        visit_num = _parse_visit_number_from_response(parts[0] if parts else "NONE")
         visit_date = None if parts[1].upper() == "NONE" else parts[1].strip()
         page_num = _parse_page_number_from_response(parts[2] if len(parts) > 2 else "NONE")
         print("[Gemini] raw:", raw)
@@ -581,11 +531,12 @@ def _detect_visit_from_image(image_base64: str) -> tuple[int | None, str | None,
     """Try Gemini first if key is set; else or on all-None result use OpenAI. Returns (visit_number, visit_date_str, page_number)."""
     from app.core.data import GEMINI_API_KEY, OPENAI_API_KEY
     if GEMINI_API_KEY:
+        print("Using Gemini to detect visit from image")
         out = _detect_visit_from_image_gemini(image_base64)
         if out != (None, None, None):
             return out
-    if OPENAI_API_KEY:
-        return _detect_visit_from_image_openai(image_base64)
+    # if OPENAI_API_KEY:
+    #     return _detect_visit_from_image_openai(image_base64)
     return (None, None, None)
 
 
@@ -624,14 +575,25 @@ def _detect_visit_from_image_openai(image_base64: str) -> tuple[int | None, str 
         parts = [p.strip() for p in raw.split(",")]
         while len(parts) < 3:
             parts.append("NONE")
-        visit_num = None
-        if parts[0].replace("NONE", "").strip().isdigit():
-            visit_num = int(parts[0].strip())
+        visit_num = _parse_visit_number_from_response(parts[0] if parts else "NONE")
         visit_date = None if parts[1].upper() == "NONE" else parts[1].strip()
         page_num = _parse_page_number_from_response(parts[2] if len(parts) > 2 else "NONE")
         return (visit_num, visit_date, page_num)
     except Exception:
         return (None, None, None)
+
+
+def _parse_visit_number_from_response(s: str) -> int | None:
+    """Extract visit number from model response. Handles '17', 'NONE', 'Visit 17' -> 17, etc."""
+    if not s or s.upper() == "NONE":
+        return None
+    s = s.strip()
+    if s.isdigit():
+        return int(s)
+    m = re.search(r"\d+", s)
+    if m:
+        return int(m.group(0))
+    return None
 
 
 def _parse_page_number_from_response(s: str) -> int | None:
@@ -645,60 +607,3 @@ def _parse_page_number_from_response(s: str) -> int | None:
     if m:
         return int(m.group(0))
     return None
-
-
-def _extract_pages_with_visits(doc: fitz.Document) -> list[tuple[int, str | None, list[tuple[int, int | None]]]]:
-    """Extract visit number, date, and page number from each page. Pages with no visit number belong to the previous visit.
-    Returns list of (visit_number_from_doc, visit_date_str | None, list of (doc_page_index_1based, page_number_from_doc or None)).
-    Uses text patterns first; if visit number not found, uses OCR. Also extracts page number from text or OCR for filename."""
-    raw_pages: list[tuple[int, str]] = []
-    for i in range(1, len(doc) + 1):
-        page = doc[i - 1]
-        text = (page.get_text("text") or "").replace("\n", " ").strip()
-        text = re.sub(r"\s+", " ", text)
-        raw_pages.append((i, text))
-    visits: list[tuple[int, str | None, list[tuple[int, int | None]]]] = []
-    current_visit_number: int | None = None
-    current_visit_date: str | None = None
-    current_visit_pages: list[tuple[int, int | None]] = []  # (doc_page_num, page_num_from_doc or None)
-    for page_num, text in raw_pages:
-        visit_num = _find_visit_number_in_text(text)
-        page_num_from_doc = _find_page_number_in_text(text)
-        visit_date_inline = VISIT_DATE_INLINE_PATTERN.search(text)
-        visit_date_legacy = VISIT_DATE_PATTERN.search(text)
-        date_str = None
-        if visit_date_inline:
-            date_str = visit_date_inline.group(1).strip()
-        elif visit_date_legacy:
-            date_str = visit_date_legacy.group(1).strip()
-        # If text has no visit number (or we want page number from OCR), try OCR on top of page
-        ocr_page_num: int | None = None
-        if visit_num is None or page_num_from_doc is None:
-            try:
-                page = doc[page_num - 1]
-                rect = page.rect
-                clip = fitz.Rect(0, 0, rect.width, rect.height * 0.25)
-                pix = page.get_pixmap(clip=clip, dpi=150, alpha=False)
-                b64 = __import__("base64").b64encode(pix.tobytes("png")).decode("ascii")
-                ocr_visit, ocr_page = _ocr_visit_and_page_from_image(b64)
-                if visit_num is None and ocr_visit is not None:
-                    visit_num = ocr_visit
-                if page_num_from_doc is None and ocr_page is not None:
-                    page_num_from_doc = ocr_page
-            except Exception:
-                pass
-        if visit_num is not None:
-            if current_visit_number is not None and current_visit_pages:
-                visits.append((current_visit_number, current_visit_date, current_visit_pages))
-                current_visit_pages = []
-            current_visit_number = visit_num
-            current_visit_date = date_str
-            current_visit_pages.append((page_num, page_num_from_doc))
-        else:
-            if current_visit_number is not None:
-                current_visit_pages.append((page_num, page_num_from_doc))
-    if current_visit_pages:
-        visits.append((current_visit_number or 1, current_visit_date, current_visit_pages))
-    if not visits:
-        visits = [(1, None, [(p, None) for p in range(1, len(doc) + 1)])]
-    return visits

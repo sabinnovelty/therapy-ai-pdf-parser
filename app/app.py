@@ -224,6 +224,39 @@ async def get_visit_pages(file_id: str, visit_number: int):
     raise HTTPException(status_code=404, detail=f"Visit {visit_number} not found for this file.")
 
 
+@app.get("/files/{file_id}/debug-page-text", tags=["Therapy Parser"])
+async def debug_page_text(file_id: str, page: int = 1):
+    """Debug: render the given PDF page (1-based) to an image, ask Gemini to return all text it sees, and return that text. Use to inspect why visit number might not be detected (e.g. page=2 for second page)."""
+    from bson import ObjectId
+    try:
+        ObjectId(file_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1")
+    root = (STORAGE_DIR / "uploads" / file_id).resolve()
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail="File folder not found")
+    pdf_files = list(root.glob("*.pdf"))
+    if not pdf_files:
+        raise HTTPException(status_code=404, detail="No PDF found in upload folder")
+    pdf_path = pdf_files[0]
+    import base64
+    import fitz
+    from app.processors.pdf_text_processor import get_page_text_via_gemini
+    doc = fitz.open(str(pdf_path))
+    try:
+        if page > len(doc):
+            raise HTTPException(status_code=400, detail=f"Page {page} out of range (PDF has {len(doc)} pages)")
+        page_obj = doc[page - 1]
+        pix = page_obj.get_pixmap(dpi=150, alpha=False)
+        image_b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
+        text = get_page_text_via_gemini(image_b64)
+        return {"file_id": file_id, "page": page, "total_pages": len(doc), "text": text}
+    finally:
+        doc.close()
+
+
 @app.get("/files/{file_id}/pages/{path:path}", tags=["Therapy Parser"])
 async def serve_visit_page_image(file_id: str, path: str):
     """Serve a page image for a file (e.g. visit-17-page-1.png). Path must be a single filename under pages/."""
