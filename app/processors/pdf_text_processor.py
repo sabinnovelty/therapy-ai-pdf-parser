@@ -66,6 +66,93 @@ def _visit_date_to_iso(date_str: str) -> str:
     return s  # return as-is if no parse
 
 
+def _visit_date_to_mm_dd_yyyy(date_str: str) -> str:
+    """Convert various date strings to MM/DD/YYYY for storage in MongoDB."""
+    from datetime import datetime
+    if not date_str or not date_str.strip():
+        return ""
+    s = date_str.strip()
+    formats = (
+        "%b %d, %Y", "%B %d, %Y",  # Dec 26, 2025 / December 26, 2025
+        "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y",  # 12/26/2025, 12/26/25
+        "%Y-%m-%d",  # 2025-12-26 (ISO)
+    )
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%m/%d/%Y")
+        except ValueError:
+            continue
+    return s  # return as-is if no parse
+
+
+def _normalize_visit_date_raw(s: str | None) -> str | None:
+    """Normalize date string: remove internal spaces; fix truncated year (12/15/2, 12/15/20, 12/15/202 -> 12/15/2025)."""
+    if not s or not s.strip():
+        return None
+    s = s.strip()
+    if s.upper() == "NONE":
+        return None
+    s = s.replace(" ", "")
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{1,4})$", s)
+    if m:
+        mm, dd, yy = m.group(1), m.group(2), m.group(3)
+        if len(yy) < 4:
+            if yy in ("2", "20", "202"):
+                yy = "2025"
+            elif yy == "200":
+                yy = "2000"
+            elif yy == "201":
+                yy = "2015"
+            elif yy == "203":
+                yy = "2030"
+            elif len(yy) == 3:
+                yy = yy + "5"
+            elif len(yy) == 2:
+                yy = yy + "25" if yy == "20" else yy + "05"
+            elif len(yy) == 1:
+                yy = "2025" if yy == "2" else yy + "025"
+            else:
+                yy = yy + "5"
+            s = f"{int(mm):02d}/{int(dd):02d}/{yy}"
+    return s
+
+
+def _parse_visit_date_and_page_from_parts(parts: list[str]) -> tuple[str | None, int | None]:
+    """Parse visit_date and page_number from comma-separated parts. Reassemble date if model returned MM,DD,YYYY (e.g. 33,02,10,2020,7 -> date 02/10/2020, page 7)."""
+    if len(parts) >= 5:
+        m, d, y = parts[1].strip(), parts[2].strip(), parts[3].strip()
+        if (
+            m.isdigit() and d.isdigit() and y.isdigit()
+            and 1 <= int(m) <= 12
+            and 1 <= int(d) <= 31
+            and len(y) == 4
+        ):
+            reassembled = f"{int(m):02d}/{int(d):02d}/{y}"
+            page_num = _parse_page_number_from_response(parts[4] if len(parts) > 4 else "NONE")
+            return (reassembled, page_num)
+    raw_date = None if (len(parts) < 2 or parts[1].upper() == "NONE") else parts[1].strip()
+    raw_date = _normalize_visit_date_raw(raw_date)
+    page_num = _parse_page_number_from_response(parts[2] if len(parts) > 2 else "NONE")
+    return (raw_date, page_num)
+
+
+def _is_valid_visit_date(s: str | None) -> bool:
+    """Return False if the string is an incomplete or invalid date (e.g. '02/', '12/26'); require a full date."""
+    if not s or not s.strip():
+        return False
+    s = s.strip()
+    if s.upper() == "NONE":
+        return False
+    if len(s) < 8:
+        return False
+    if s.endswith("/") or s.endswith("-"):
+        return False
+    if re.match(r"^\d{1,2}/\s*$", s) or re.match(r"^\d{1,2}-\s*$", s):
+        return False
+    return _visit_date_to_mm_dd_yyyy(s) != "" and len(_visit_date_to_mm_dd_yyyy(s)) == 10
+
+
 class PDFTextProcessor(BaseFileProcessor):
 
     def clean_text(self, raw_text: str) -> str:
@@ -221,13 +308,9 @@ class PDFTextProcessor(BaseFileProcessor):
             total_pages = len(doc)
 
             visits_dict = {}
-
             current_visit_number = None
             current_visit_page_counter = 1
-            current_visit_date = None  # date of the visit we're currently in (for continuation check)
-            used_page_numbers_in_visit = set()  # document page numbers already used in filename (avoid duplicates)
-
-            buffer_pages = []
+            buffer_pages = []  # Case 2: pages with visitDate but no visitNumber, until we see a visitNumber
 
             for i in range(total_pages):
 
@@ -237,150 +320,34 @@ class PDFTextProcessor(BaseFileProcessor):
                 )
 
                 page = doc[i]
-
                 temp_image = pages_dir / f"temp_{i}.png"
-
                 pix = page.get_pixmap(dpi=150, alpha=False)
                 pix.save(str(temp_image))
 
                 image_b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
-                # page_text = get_page_text_via_gemini(image_b64)
-                # print(f"Page text****: {page_text}")
-
-
                 visit_number, visit_date, page_number = _detect_visit_from_image(image_b64)
 
                 print(
                     f"[Page {i+1}] visit_number={visit_number}, visit_date={visit_date}, page_number={page_number}"
                 )
 
-                # -------------------------------------------------
-                # CASE 1: Nothing found → skip
-                # -------------------------------------------------
-                if visit_number is None and visit_date is None and current_visit_number is None:
-                    temp_image.unlink(missing_ok=True)
-                    print(f"[Page {i+1}] skipped (no visit info)")
-                    continue
-
-                # -------------------------------------------------
-                # CASE 2: Visit date but no visit number → buffer
-                # -------------------------------------------------
-                if visit_number is None and visit_date is not None and current_visit_number is None:
-                    buffer_pages.append(
-                        {
-                            "index": i,
-                            "temp_path": temp_image,
-                            "visit_date": visit_date,
-                            "page_number": page_number,  # page number found on PDF (for filename/label)
-                        }
-                    )
-
-                    print(f"[Page {i+1}] buffered waiting for visit number")
-                    continue
-
-                # -------------------------------------------------
-                # CASE 3: Visit number found
-                # -------------------------------------------------
-                if visit_number is not None:
-
-                    current_visit_number = visit_number
-                    current_visit_page_counter = 1
-                    used_page_numbers_in_visit = set()
-                    current_visit_date = (
-                        visit_date
-                        if visit_date
-                        else (buffer_pages[0]["visit_date"] if buffer_pages else None)
-                    )
-
-                    def _page_num_for_filename(doc_page_num: int | None, fallback: int) -> int:
-                        """Use document page number if available and not already used; else fallback."""
-                        if doc_page_num is not None and doc_page_num not in used_page_numbers_in_visit:
-                            used_page_numbers_in_visit.add(doc_page_num)
-                            return doc_page_num
-                        return fallback
-
-                    # process buffered pages first
-                    if buffer_pages:
-
-                        print(f"Processing {len(buffer_pages)} buffered pages")
-
-                        for buf in buffer_pages:
-                            doc_pnum = buf.get("page_number")
-                            label = _page_num_for_filename(doc_pnum, current_visit_page_counter)
-                            final_name = f"visit-{visit_number}-page-{label}.png"
-                            final_path = pages_dir / final_name
-
-                            os.rename(buf["temp_path"], final_path)
-
-                            if visit_number not in visits_dict:
-                                visit_date_iso = (
-                                    _visit_date_to_iso(buf["visit_date"])
-                                    if buf["visit_date"]
-                                    else ""
-                                )
-
-                                visits_dict[visit_number] = {
-                                    "visitDate": visit_date_iso,
-                                    "pages": [],
-                                }
-
-                            visits_dict[visit_number]["pages"].append(
-                                {
-                                    "pageNumber": buf["index"] + 1,
-                                    "pageLabel": doc_pnum if doc_pnum is not None else current_visit_page_counter,
-                                    "image": f"pages/{final_name}",
-                                }
-                            )
-
-                            current_visit_page_counter += 1
-
-                        buffer_pages.clear()
-
-                    doc_pnum = page_number
-                    label = _page_num_for_filename(doc_pnum, current_visit_page_counter)
-                    final_name = f"visit-{visit_number}-page-{label}.png"
-                    final_path = pages_dir / final_name
-
-                    os.rename(temp_image, final_path)
-
-                    if visit_number not in visits_dict:
-                        visit_date_iso = _visit_date_to_iso(visit_date) if visit_date else ""
-
-                        visits_dict[visit_number] = {
-                            "visitDate": visit_date_iso,
-                            "pages": [],
-                        }
-
-                    visits_dict[visit_number]["pages"].append(
-                        {
-                            "pageNumber": i + 1,
-                            "pageLabel": doc_pnum if doc_pnum is not None else current_visit_page_counter,
-                            "image": f"pages/{final_name}",
-                        }
-                    )
-
-                    current_visit_page_counter += 1
-
-                    print(f"[Page {i+1}] saved as {final_name}")
-
-                    continue
-
-                # -------------------------------------------------
-                # CASE 4: Page has a visit date but no visit number → not continuation of previous; reset and buffer (new segment)
-                # -------------------------------------------------
+                # Case 1 skip: no visitNumber AND no visitDate AND no current visit → skip
                 if (
                     visit_number is None
-                    and current_visit_number is not None
-                    and visit_date is not None
-                    and (
-                        current_visit_date is None
-                        or visit_date.strip() != current_visit_date.strip()
-                    )
+                    and (visit_date is None or not visit_date.strip())
+                    and current_visit_number is None
                 ):
-                    current_visit_number = None
-                    current_visit_page_counter = 1
-                    current_visit_date = None
-                    used_page_numbers_in_visit = set()
+                    temp_image.unlink(missing_ok=True)
+                    print(f"[Page {i+1}] skipped (no visit number, no visit date)")
+                    continue
+
+                # Case 2 buffer: has visitDate but no visitNumber and no current visit → buffer
+                if (
+                    visit_number is None
+                    and visit_date
+                    and visit_date.strip()
+                    and current_visit_number is None
+                ):
                     buffer_pages.append(
                         {
                             "index": i,
@@ -389,37 +356,78 @@ class PDFTextProcessor(BaseFileProcessor):
                             "page_number": page_number,
                         }
                     )
-                    print(f"[Page {i+1}] new date, buffered (not continuation of previous visit)")
+                    print(f"[Page {i+1}] buffered (visit date only, waiting for visit number)")
                     continue
 
-                # -------------------------------------------------
-                # CASE 5: Continuation page (same visit, no new visit number)
-                # -------------------------------------------------
-                if visit_number is None and current_visit_number is not None:
-                    doc_pnum = page_number
-                    if doc_pnum is not None and doc_pnum not in used_page_numbers_in_visit:
-                        used_page_numbers_in_visit.add(doc_pnum)
-                        label = doc_pnum
-                    else:
+                # New visit: visit number found
+                if visit_number is not None:
+                    current_visit_number = visit_number
+                    current_visit_page_counter = 1
+
+                    # Use visit_date from current page, or from first buffered page if current has none
+                    date_for_visit = visit_date
+                    if not date_for_visit and buffer_pages:
+                        date_for_visit = buffer_pages[0].get("visit_date")
+
+                    if visit_number not in visits_dict:
+                        visit_date_mm_dd_yyyy = (
+                            _visit_date_to_mm_dd_yyyy(date_for_visit) if date_for_visit else ""
+                        )
+                        visits_dict[visit_number] = {
+                            "visitDate": visit_date_mm_dd_yyyy,
+                            "pages": [],
+                        }
+
+                    # Flush buffer: assign buffered pages to this visit as page-1, page-2, ...
+                    for buf in buffer_pages:
                         label = current_visit_page_counter
+                        final_name = f"visit-{visit_number}-page-{label}.png"
+                        final_path = pages_dir / final_name
+                        os.rename(buf["temp_path"], final_path)
+                        visits_dict[visit_number]["pages"].append(
+                            {
+                                "pageNumber": buf["index"] + 1,
+                                "pageLabel": buf.get("page_number") or label,
+                                "image": f"pages/{final_name}",
+                            }
+                        )
+                        current_visit_page_counter += 1
+                    buffer_pages.clear()
 
-                    final_name = f"visit-{current_visit_number}-page-{label}.png"
+                    # Save current page
+                    final_name = f"visit-{visit_number}-page-{current_visit_page_counter}.png"
                     final_path = pages_dir / final_name
-
                     os.rename(temp_image, final_path)
-
-                    visits_dict[current_visit_number]["pages"].append(
+                    visits_dict[visit_number]["pages"].append(
                         {
                             "pageNumber": i + 1,
-                            "pageLabel": doc_pnum if doc_pnum is not None else current_visit_page_counter,
+                            "pageLabel": page_number if page_number is not None else current_visit_page_counter,
                             "image": f"pages/{final_name}",
                         }
                     )
-
                     current_visit_page_counter += 1
+                    print(f"[Page {i+1}] saved as {final_name} (new visit)")
+                    continue
 
-                    print(f"[Page {i+1}] continuation saved as {final_name}")
+                # Continuation: no visit number, we have current visit → same visit
+                if visit_number is None and current_visit_number is not None:
+                    if visit_date and visit_date.strip():
+                        visit_date_mm_dd_yyyy = _visit_date_to_mm_dd_yyyy(visit_date)
+                        if visit_date_mm_dd_yyyy:
+                            visits_dict[current_visit_number]["visitDate"] = visit_date_mm_dd_yyyy
 
+                    final_name = f"visit-{current_visit_number}-page-{current_visit_page_counter}.png"
+                    final_path = pages_dir / final_name
+                    os.rename(temp_image, final_path)
+                    visits_dict[current_visit_number]["pages"].append(
+                        {
+                            "pageNumber": i + 1,
+                            "pageLabel": page_number if page_number is not None else current_visit_page_counter,
+                            "image": f"pages/{final_name}",
+                        }
+                    )
+                    current_visit_page_counter += 1
+                    print(f"[Page {i+1}] saved as {final_name} (continuation)")
                     continue
 
             visits_result = [
@@ -504,12 +512,14 @@ def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str 
         resp = model.generate_content(
             [_DETECT_VISIT_PROMPT, img],
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=128,
+                max_output_tokens=256,
                 temperature=0,
             ),
         )
+        print(f"Gemini first response *****: {resp.text}")
         raw = (resp.text or "").strip()
-        print(f"Gemini response: {raw}")
+        raw = raw.replace("\n", "").replace("\r", "")  # collapse newlines so "12/\n15/2025" -> "12/15/2025"
+        print(f"Gemini response stripped response ***: {raw}")
         if not raw or raw.upper() == "NONE":
             print("[Gemini] raw:", raw or "(empty/NONE)")
             print("[Gemini] parsed: visit_number=None, visit_date=None, page_number=None")
@@ -518,8 +528,10 @@ def _detect_visit_from_image_gemini(image_base64: str) -> tuple[int | None, str 
         while len(parts) < 3:
             parts.append("NONE")
         visit_num = _parse_visit_number_from_response(parts[0] if parts else "NONE")
-        visit_date = None if parts[1].upper() == "NONE" else parts[1].strip()
-        page_num = _parse_page_number_from_response(parts[2] if len(parts) > 2 else "NONE")
+        raw_visit_date, page_num = _parse_visit_date_and_page_from_parts(parts)
+        visit_date = raw_visit_date if _is_valid_visit_date(raw_visit_date) else None
+        if raw_visit_date and not visit_date:
+            print("[Gemini] rejected incomplete/invalid visit_date: %r" % raw_visit_date)
         print("[Gemini] raw:", raw)
         print("[Gemini] parsed: visit_number=%s, visit_date=%s, page_number=%s" % (visit_num, visit_date, page_num))
         return (visit_num, visit_date, page_num)
@@ -576,8 +588,8 @@ def _detect_visit_from_image_openai(image_base64: str) -> tuple[int | None, str 
         while len(parts) < 3:
             parts.append("NONE")
         visit_num = _parse_visit_number_from_response(parts[0] if parts else "NONE")
-        visit_date = None if parts[1].upper() == "NONE" else parts[1].strip()
-        page_num = _parse_page_number_from_response(parts[2] if len(parts) > 2 else "NONE")
+        raw_visit_date, page_num = _parse_visit_date_and_page_from_parts(parts)
+        visit_date = raw_visit_date if _is_valid_visit_date(raw_visit_date) else None
         return (visit_num, visit_date, page_num)
     except Exception:
         return (None, None, None)
