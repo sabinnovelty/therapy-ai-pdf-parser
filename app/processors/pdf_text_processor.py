@@ -348,14 +348,17 @@ class PDFTextProcessor(BaseFileProcessor):
                     and visit_date.strip()
                     and current_visit_number is None
                 ):
-                    buffer_pages.append(
-                        {
-                            "index": i,
-                            "temp_path": temp_image,
-                            "visit_date": visit_date,
-                            "page_number": page_number,
-                        }
-                    )
+                    if buffer_pages:
+                        print('has buffer pages')
+                    else:
+                        buffer_pages.append(
+                            {
+                                "index": i,
+                                "temp_path": temp_image,
+                                "visit_date": visit_date,
+                                "page_number": page_number,
+                            }
+                        )
                     print(f"[Page {i+1}] buffered (visit date only, waiting for visit number)")
                     continue
 
